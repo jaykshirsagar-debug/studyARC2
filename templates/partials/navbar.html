@@ -1,6 +1,6 @@
 <nav>
     <a href="/">StudyARC</a>
-    <a href="/dashboard/">Dashboard</a>
+    <a href="{% url 'dashboard' %}">Dashboard</a>
 
     {% if user.is_authenticated %}
         <a href="/logout/">Logout</a>
