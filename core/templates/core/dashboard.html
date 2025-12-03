@@ -2,7 +2,18 @@
 {% block title %}Dashboard - StudyARC{% endblock %}
 
 {% block content %}
-<h1>Hello, {{ user.username }} 👋</h1>
+    <h1>Hello, {{ user.username }} 👋</h1>
 
-<p>Welcome to your StudyARC dashboard.</p>
+    <p>Welcome to your StudyARC dashboard.</p>
+
+    <div>
+
+        <a class="btn" href="{% url 'maths:maths' %}">Maths</a>
+        <br>
+        <a class="btn">Physics (Coming Sooon)</a>
+
+
+
+    </div>
+
 {% endblock %}

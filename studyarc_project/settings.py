@@ -39,7 +39,8 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'core',
-    'accounts'
+    'accounts',
+    'maths'
 ]
 
 AUTH_USER_MODEL = "accounts.User"
@@ -60,7 +61,7 @@ ROOT_URLCONF = 'studyarc_project.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': ['templates', 'core/templates', 'accounts/templates'],
+        'DIRS': ['templates', 'core/templates', 'accounts/templates', 'maths/templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
