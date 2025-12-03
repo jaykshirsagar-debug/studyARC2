@@ -1,7 +1,17 @@
-{% extends 'base.html' %}
-{% block title %}Logout - StudyARC{% endblock %}
+{% extends "base.html" %}
+{% block title %}Register - StudyARC{% endblock %}
 
 {% block content %}
-<h1>Logout</h1>
-<p>Your personalised study companion.</p>
+    <h1>Create an Account</h1>
+
+    <form class="register-form" method="POST">
+        {% csrf_token %}
+        {{ form.as_p }}
+
+        <button type="submit">Register</button>
+    </form>
+
+    <p>
+        Already have an account? <a href="{% url 'accounts:login' %}">Login here</a>.
+    </p>
 {% endblock %}

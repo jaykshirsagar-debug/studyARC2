@@ -1,7 +1,31 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
 {% block title %}Login - StudyARC{% endblock %}
 
 {% block content %}
-<h1>Login</h1>
-<p>Your personalised study companion.</p>
+    <h1>Login</h1>
+
+    <form method="POST">
+        {% csrf_token %}
+
+        <label>Username</label>
+        <input type="text" name="username" required>
+
+        <label>Password</label>
+        <input type="password" name="password" required>
+
+        {% if messages %}
+            <ul>
+                {% for message in messages %}
+                    <li style="color: red;">{{ message }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+
+        <button type="submit">Login</button>
+    </form>
+
+    <p>
+        Don't have an account?
+        <a href="{% url 'accounts:register' %}">Register here</a>.
+    </p>
 {% endblock %}
