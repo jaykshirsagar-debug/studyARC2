@@ -3,15 +3,14 @@
     <a href="{% url 'dashboard' %}">Dashboard</a>
 
     {% if user.is_authenticated %}
-    <form action="{% url 'accounts:logout' %}" method="POST" style="display: inline-block;">
-        {% csrf_token %}
-        <button type="submit" style="background:none;border:none;color:#4a77ff;cursor:pointer;">
-            Logout
-        </button>
-    </form>
+        <form action="{% url 'logout' %}" method="POST" style="display: inline-block;">
+            {% csrf_token %}
+            <button type="submit" style="background:none;border:none;color:#4a77ff;cursor:pointer;">
+                Logout
+            </button>
+        </form>
     {% else %}
-        <a href="{% url 'accounts:login' %}">Login</a>
-        <a href="{% url 'accounts:register' %}">Register</a>
+        <a href="{% url 'login' %}">Login</a>
+        <a href="{% url 'register' %}">Register</a>
     {% endif %}
-
 </nav>

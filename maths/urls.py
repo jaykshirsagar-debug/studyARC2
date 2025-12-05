@@ -1,6 +1,10 @@
+# maths/urls.py
 from django.urls import path
 from . import views
 
+app_name = "maths"
+
 urlpatterns = [
-    path('dashboard/maths', views.maths, name='maths'),
+    path("", views.classpad_main, name="main"),  # /maths/
+    
 ]
