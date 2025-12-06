@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Dashboard - StudyARC{% endblock %}
+
+{% block exthead %}
+    <!-- jQuery first -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
+    <!-- Local MathQuill -->
+    <link rel="stylesheet" href="{% static 'maths/css/mathquill.min.css' %}">
+    <script src="{% static 'maths/js/mathquill.min.js' %}"></script>
+    <script src="{% static 'maths/js/casio.js' %}"></script>
+{% endblock %}
+
+{% block content %}
+    <h1>Hello, {{ user.username }} 👋</h1>
+    <p>Welcome to maths – equation solver v0.1</p>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <label>Enter an equation (e.g. \( x^2 = 4 \)):</label>
+        <div id="math-field"
+             style="border: 1px solid #ccc; padding: 8px; min-height: 40px; font-size: 18px;"></div>
+
+        <input type="hidden" id="math-latex" name="expression">
+
+        <button type="submit" style="margin-top: 10px;">Solve</button>
+    </form>
+
+    {% if error %}
+        <p style="color:red; margin-top:1rem;">{{ error }}</p>
+    {% endif %}
+
+    {% if solutions %}
+        <div style="margin-top:1rem;">
+            <h2>Solution</h2>
+            <p>Equation: <code>{{ equation }}</code></p>
+            <p>Solving for: <code>{{ variable }}</code></p>
+            <ul>
+                {% for s in solutions %}
+                    <li>{{ variable }} = {{ s }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+{% endblock %}

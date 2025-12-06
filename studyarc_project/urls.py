@@ -10,11 +10,8 @@ urlpatterns = [
     path('', core_views.home, name='home'),
     path('dashboard/', core_views.dashboard, name='dashboard'),
 
-    # auth
-    path('login/', accounts_views.login_view, name='login'),
-    path('logout/', accounts_views.logout_view, name='logout'),
-    path('register/', accounts_views.register_view, name='register'),
-
     # maths app (namespaced)
     path('maths/', include(('maths.urls', 'maths'), namespace='maths')),
+    path('accounts/', include(('accounts.urls', 'accounts'), namespace='accounts'))
+    
 ]

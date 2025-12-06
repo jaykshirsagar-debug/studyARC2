@@ -5,6 +5,7 @@ from . import views
 app_name = "maths"
 
 urlpatterns = [
-    path("", views.classpad_main, name="main"),  # /maths/
-    
+    # Main ClassPad screen
+    path("", views.maths, name="maths"),
+
 ]
