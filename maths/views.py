@@ -2,145 +2,218 @@
 from django.shortcuts import render
 from sympy import (
     Eq, Symbol, exp, Interval, S, solveset, sympify,
-    FiniteSet, ConditionSet, Union, nsolve, latex, I, pi, simplify
+    pi, simplify
 )
 from sympy.parsing.latex import parse_latex
-from sympy.sets.fancysets import ImageSet
+from sympy.sets import ConditionSet, Union, ImageSet, FiniteSet
 import numpy as np
 
 
-def format_general_solution(solset, var_name):
-    from sympy import pi, Symbol, simplify
-    from sympy.sets import FiniteSet, ConditionSet, Union, ImageSet
-
-    # 1. Finite set → just list the values
+# ----------------------------------------------------------------------------
+# 1. Simple general-solution formatter (plain text)
+# ----------------------------------------------------------------------------
+def simple_format_general_solution(solset, var_name="x") -> str:
+    """
+    Plain-text general-solution formatter.
+    Keeps it simple, handles common trig infinite sets where SymPy
+    returns ImageSet/Union(ImageSet, ...). Otherwise falls back to str().
+    """
+    # Finite discrete set -> list them
     if isinstance(solset, FiniteSet):
-        return ", ".join(f"{var_name} = {s}" for s in solset)
+        vals = list(solset)
+        return ", ".join(f"{var_name} = {v}" for v in vals)
 
-    # 2. No closed form
+    # ConditionSet or unknown structure -> just show the raw SymPy set
     if isinstance(solset, ConditionSet):
         return f"Solution set described by: {solset}"
 
-    # Helper: extract lambda expressions from ImageSet / Union(ImageSet, ...)
-    def extract_lambdas(s):
+    # Collect ImageSet objects (for many trig equations)
+    def extract_imagesets(s):
+        imgs = []
         if isinstance(s, ImageSet):
-            return [s.lamda.expr]
-        if isinstance(s, Union):
-            exprs = []
+            imgs.append(s)
+        elif isinstance(s, Union):
             for subset in s.args:
                 if isinstance(subset, ImageSet):
-                    exprs.append(subset.lamda.expr)
-            return exprs
-        return []
+                    imgs.append(subset)
+        return imgs
 
-    lam_exprs = extract_lambdas(solset)
-    lam_exprs = [simplify(e) for e in lam_exprs]
-
-    if not lam_exprs:
+    imgs = extract_imagesets(solset)
+    if not imgs:
         return str(solset)
 
-    # Helper: get the constant offset (mod 2π) from something like 2*pi*n + offset
+    # Helper: constant offset modulo 2π
     def offset_mod_2pi(expr):
-        expr = simplify(expr)
-        if expr.is_Add:
-            for term in expr.args:
-                if term.free_symbols == set():  # constant term
-                    return simplify(term % (2*pi))
+        expr_s = simplify(expr)
+        if expr_s.is_Add:
+            for term in expr_s.args:
+                if term.free_symbols == set():
+                    return simplify(term % (2 * pi))
             return 0
-        return simplify(expr % (2*pi))
+        return simplify(expr_s % (2 * pi))
 
-    # ---------------------------
-    # Case: two ImageSets (typical trig)
-    # ---------------------------
-    if len(lam_exprs) == 2:
-        e1, e2 = lam_exprs
-        off1 = offset_mod_2pi(e1)
-        off2 = offset_mod_2pi(e2)
+    offsets = []
+    for img in imgs:
+        lam = img.lamda.expr
+        dummy_syms = list(img.lamda.variables)
+        dummy = dummy_syms[0] if dummy_syms else None
 
-        offs = {off1, off2}
+        if dummy is None:
+            offsets.append(offset_mod_2pi(lam))
+            continue
 
-        # sin(x) = 0 → offsets 0 and π
-        if offs == {0, pi}:
-            return f"{var_name} = n*pi,  n ∈ ℤ"
+        seen = set()
+        sample_offsets = []
+        # sample a few integer values of the dummy to discover offsets
+        for m in range(0, 8):
+            try:
+                sampled = lam.subs(dummy, m)
+                off = offset_mod_2pi(sampled)
+            except Exception:
+                continue
+            key = str(off)
+            if key not in seen:
+                seen.add(key)
+                sample_offsets.append(off)
 
-        # cos(x) = 0 → offsets π/2 and 3π/2
-        if offs == {pi/2, 3*pi/2}:
-            return f"{var_name} = pi/2 + n*pi,  n ∈ ℤ"
+        offsets.extend(sample_offsets)
 
-        # General sin(x) = c or cos(x) = c:
-        # e.g. {pi/6, 5*pi/6}, {α, π-α}, etc.
-        # Sort for nicer output
-        ordered_offs = sorted(list(offs), key=lambda o: float(o.evalf()))
-        parts = [f"{var_name} = {o} + 2*pi*n" for o in ordered_offs]
-        return " or ".join(parts) + ",  n ∈ ℤ"
+    # Normalize and dedupe offsets into [0, 2π)
+    unique = []
+    seen = set()
+    for o in offsets:
+        o_s = simplify(o)
+        try:
+            norm = simplify(o_s % (2 * pi))
+        except Exception:
+            norm = o_s
+        key = str(norm)
+        if key not in seen:
+            seen.add(key)
+            unique.append(norm)
 
-    # ---------------------------
-    # Case: single ImageSet (e.g. tan(x) = 0)
-    # ---------------------------
-    if len(lam_exprs) == 1:
-        expr = lam_exprs[0]
+    if not unique:
+        return str(solset)
 
-        # tan(x) = 0 → n*pi (period π)
-        # (and sometimes sin(x)=0 simplifies to this too)
-        if simplify(expr % pi) == 0:
-            return f"{var_name} = n*pi,  n ∈ ℤ"
+    # Sort offsets: try numeric eval, else fall back to string
+    def sort_key(expr):
+        try:
+            return (0, float(expr.evalf()))
+        except Exception:
+            return (1, str(expr))
 
-        # Generic periodic form
-        return f"{var_name} = {expr},  n ∈ ℤ"
+    unique_sorted = sorted(unique, key=sort_key)
 
-    # Fallback
+    # One offset
+    if len(unique_sorted) == 1:
+        off = unique_sorted[0]
+        try:
+            if simplify(off % pi) == 0:
+                return f"{var_name} = n*pi, n ∈ ℤ"
+        except Exception:
+            pass
+        return f"{var_name} = {off} + 2*pi*n, n ∈ ℤ"
+
+    # Two offsets → maybe differ by π
+    if len(unique_sorted) == 2:
+        a, b = unique_sorted
+        try:
+            if simplify((b - a) % (2 * pi)) == pi:
+                return f"{var_name} = {a} + n*pi, n ∈ ℤ"
+        except Exception:
+            pass
+        return f"{var_name} = {a} + 2*pi*n or {var_name} = {b} + 2*pi*n, n ∈ ℤ"
+
+    # More than two families → fallback
     return str(solset)
 
 
-
-def numeric_scan_nsolve(f, var, domain_a, domain_b, solution_type="real", var_name="x"):
+# ----------------------------------------------------------------------------
+# 2. Numeric root finding for interval mode (SymPy evalf-based)
+# ----------------------------------------------------------------------------
+def f_numeric_from_sympy(f, var):
     """
-    Try to find numeric roots of f(var) = 0 in [domain_a, domain_b] using nsolve
-    from multiple initial guesses. Returns a list of LaTeX strings like 'x = ...'.
+    Build a safe numeric evaluator: x (float) -> float(f(x)).
+    Uses SymPy subs + evalf and converts to Python float.
     """
-    roots = set()
-
-    # Convert domain bounds to floats (fallback to [-10,10] if something goes wrong)
-    try:
-        a = float(domain_a.evalf()) if hasattr(domain_a, "evalf") else float(domain_a)
-        b = float(domain_b.evalf()) if hasattr(domain_b, "evalf") else float(domain_b)
-    except Exception:
-        a, b = -10.0, 10.0
-
-    guess_values = np.linspace(a, b, 40)
-
-    for g in guess_values:
+    def f_num(x):
         try:
-            sol = nsolve(f, var, g)
-            sol_c = complex(sol.evalf())
+            val = f.subs(var, x).evalf()
+            return float(val)
         except Exception:
+            return float("nan")
+    return f_num
+
+
+def bracket_roots(f_numeric, a, b, N=400):
+    """
+    Divide [a, b] into N segments, detect sign changes f(x_i)*f(x_{i+1}) < 0.
+    Return a list of (left, right) brackets that each contain at least one root.
+    """
+    xs = np.linspace(a, b, N + 1)
+    fs = [f_numeric(x) for x in xs]
+
+    brackets = []
+    for i in range(N):
+        x1, x2 = xs[i], xs[i + 1]
+        f1, f2 = fs[i], fs[i + 1]
+
+        if np.isnan(f1) or np.isnan(f2):
             continue
 
-        # If real-only mode, skip complex roots
-        if solution_type == "real" and abs(sol_c.imag) > 1e-6:
+        # exact root at grid point
+        if abs(f1) < 1e-12:
+            brackets.append((x1 - 1e-6, x1 + 1e-6))
             continue
 
-        if abs(sol_c.imag) < 1e-6:
-            real_part = round(sol_c.real, 6)
-            val = sympify(real_part)
+        # sign change
+        if f1 * f2 < 0:
+            brackets.append((x1, x2))
+
+    return brackets
+
+
+def bisect_root(f_numeric, left, right, tol=1e-10, max_iter=80):
+    """
+    Given f_numeric and an interval [left, right] with opposite signs,
+    use bisection to find a root. Guaranteed to converge for continuous f.
+    """
+    fl = f_numeric(left)
+    fr = f_numeric(right)
+
+    if np.isnan(fl) or np.isnan(fr) or fl * fr > 0:
+        return None
+
+    for _ in range(max_iter):
+        mid = (left + right) / 2.0
+        fm = f_numeric(mid)
+
+        if np.isnan(fm):
+            return None
+
+        if abs(fm) < tol:
+            return mid
+
+        # choose the half that contains a sign change
+        if fl * fm < 0:
+            right = mid
+            fr = fm
         else:
-            real_part = round(sol_c.real, 6)
-            imag_part = round(sol_c.imag, 6)
-            val = sympify(real_part) + sympify(imag_part) * I
+            left = mid
+            fl = fm
 
-        eq_latex = rf"{var_name} = {latex(val)}"
-        roots.add(eq_latex)
-
-    # Sort just for stable display; real before complex roughly
-    return sorted(list(roots))
+    return (left + right) / 2.0
 
 
+# ----------------------------------------------------------------------------
+# 3. Main view
+# ----------------------------------------------------------------------------
 def maths(request):
     context = {}
 
     if request.method == "POST":
         latex_expr = request.POST.get("expression", "").strip()
-        solution_type = request.POST.get("solution_type", "real")    # "real" or "complex"
+        solution_type = request.POST.get("solution_type", "real")    # kept for future; interval = real only
         solve_mode = request.POST.get("solve_mode", "interval")      # "interval" or "general"
         domain_min = request.POST.get("domain_min", "-10")
         domain_max = request.POST.get("domain_max", "10")
@@ -153,67 +226,90 @@ def maths(request):
 
         if latex_expr:
             try:
-                # Parse LaTeX to SymPy expression
+                # Parse LaTeX from MathQuill
                 expr = parse_latex(latex_expr)
 
-                # Treat 'e' as Euler's constant
+                # Map textual 'e' and 'pi' to their mathematical constants
                 expr = expr.subs(Symbol("e"), exp(1))
+                expr = expr.subs(Symbol("pi"), pi)  # IMPORTANT: turn a Symbol 'pi' into constant pi
 
-                # If it's not already an equation, treat it as expr = 0
+                # Ensure we have an equation; if user typed just an expression, solve expr = 0
                 if isinstance(expr, Eq):
                     equation = expr
                 else:
                     equation = Eq(expr, 0)
 
-                # Pick a variable to solve for (first free symbol)
+                # Robust variable selection:
+                #  1. Prefer a symbol literally named 'x' if present.
+                #  2. Otherwise, pick first symbol that is not named 'pi' or 'π'.
                 symbols = sorted(equation.free_symbols, key=lambda s: s.name)
-                if not symbols:
+                var = None
+                if symbols:
+                    # prefer x
+                    xs = [s for s in symbols if s.name == "x"]
+                    if xs:
+                        var = xs[0]
+                    else:
+                        # skip any pi-like symbols if they still exist
+                        non_pi = [s for s in symbols if s.name not in ("pi", "π")]
+                        var = non_pi[0] if non_pi else symbols[0]
+                elif "x" in latex_expr:
+                    var = Symbol("x")
+
+                if var is None:
                     context["error"] = "No variable found to solve for."
                     return render(request, "maths/maths.html", context)
 
-                var = symbols[0]
                 var_name = str(var)
                 context["variable"] = var_name
+                context["equation"] = str(equation)
 
-                # Store equation as LaTeX for output
-                context["equation"] = latex(equation)
-
-                # Work with f(x) = 0
+                # Work with f(x) = LHS - RHS
                 f = equation.lhs - equation.rhs
 
-                # ===== MODE 1: GENERAL SOLUTION =====
+                # =============================
+                # MODE: GENERAL SOLUTION
+                # =============================
                 if solve_mode == "general":
                     solset = solveset(f, var, domain=S.Reals)
-                    formatted = format_general_solution(solset, var_name)
-                    context["general_solution"] = formatted
+                    context["general_solution"] = simple_format_general_solution(solset, var_name)
                     return render(request, "maths/maths.html", context)
 
-                # ===== MODE 2: SOLUTIONS IN AN INTERVAL =====
-                # Interpret domain bounds (allow things like '2*pi')
-                a = sympify(domain_min)
-                b = sympify(domain_max)
-                domain = Interval(a, b)
+                # =============================
+                # MODE: INTERVAL SOLUTION
+                # =============================
+                # Parse domain bounds safely
+                try:
+                    a = float(sympify(domain_min).evalf())
+                    b = float(sympify(domain_max).evalf())
+                except Exception:
+                    a, b = -10.0, 10.0
 
-                solset_interval = solveset(f, var, domain=domain)
+                if b <= a:
+                    b = a + 1.0  # avoid zero-length interval
 
-                solutions = []
+                # Build numeric evaluator using SymPy subs + evalf
+                f_numeric = f_numeric_from_sympy(f, var)
 
-                # If FiniteSet: enumerate (exact or symbolic)
-                if isinstance(solset_interval, FiniteSet):
-                    for s in solset_interval:
-                        val = s.evalf()
-                        if solution_type == "real":
-                            if val.is_real:
-                                solutions.append(rf"{var_name} = {latex(val)}")
-                        else:
-                            solutions.append(rf"{var_name} = {latex(val)}")
+                # 1) Find brackets with sign changes
+                brackets = bracket_roots(f_numeric, a, b, N=400)
 
-                # If no finite solutions or non-finite set, try numeric scan
-                if not solutions and not isinstance(solset_interval, FiniteSet):
-                    solutions = numeric_scan_nsolve(f, var, a, b, solution_type=solution_type, var_name=var_name)
+                # 2) Bisection in each bracket
+                roots = []
+                for left, right in brackets:
+                    r = bisect_root(f_numeric, left, right)
+                    if r is not None:
+                        roots.append(r)
 
-                if solutions:
-                    context["solutions"] = solutions
+                # 3) Deduplicate roots (neighbouring brackets may converge to the same root)
+                roots_sorted = sorted(roots)
+                cleaned = []
+                for r in roots_sorted:
+                    if not cleaned or abs(r - cleaned[-1]) > 1e-6:
+                        cleaned.append(r)
+
+                if cleaned:
+                    context["solutions"] = [f"{var_name} = {round(r, 10)}" for r in cleaned]
                 else:
                     context["error"] = "No solutions found in the given domain."
 

@@ -4,14 +4,10 @@
 {% block title %}Math Solver - StudyARC{% endblock %}
 
 {% block exthead %}
-    <!-- jQuery required for MathQuill -->
+    <!-- jQuery + MathQuill for INPUT ONLY -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-
-    <!-- MathQuill -->
     <link rel="stylesheet" href="{% static 'maths/css/mathquill.min.css' %}">
     <script src="{% static 'maths/js/mathquill.min.js' %}"></script>
-    <!-- Optional: your extra JS -->
-    <script src="{% static 'maths/js/casio.js' %}"></script>
 
     <style>
         .math-input-box {
@@ -34,7 +30,7 @@
 
 {% block content %}
 
-<h1>Hello, {{ user.username }} 👋</h1>
+<h1>Casio Classpad replica but better, {{ user.username }} 👋</h1>
 <p>Welcome to the StudyARC symbolic equation solver.</p>
 
 <form method="POST">
@@ -96,16 +92,12 @@
     <h2>Solutions in Domain</h2>
 
     {% if equation %}
-    <p><strong>Equation:</strong>
-        <span class="mq-output">{{ equation }}</span>
-    </p>
+    <p><strong>Equation:</strong> {{ equation }}</p>
     {% endif %}
 
     <ul>
     {% for s in solutions %}
-        <li>
-            <span class="mq-output">{{ s }}</span>
-        </li>
+        <li>{{ s }}</li>
     {% endfor %}
     </ul>
 </div>
@@ -117,21 +109,20 @@
     <h2>General Solution</h2>
 
     {% if equation %}
-    <p><strong>Equation:</strong>
-        <span class="mq-output">{{ equation }}</span>
-    </p>
+    <p><strong>Equation:</strong> {{ equation }}</p>
     {% endif %}
 
-    <p style="font-size: 1.2em;">
-        <span class="mq-output">{{ general_solution }}</span>
+    <p style="font-size: 1.1em;">
+        {{ general_solution }}
     </p>
+
     <p style="font-size: 0.9em; color: #666;">
-        Here, <strong>n</strong> represents any integer (n ∈ ℤ).
+        (General solutions may include parameters like n ∈ ℤ.)
     </p>
 </div>
 {% endif %}
 
-<!-- MathQuill Setup Script -->
+<!-- MathQuill Setup Script for INPUT ONLY -->
 <script>
 document.addEventListener("DOMContentLoaded", function () {
     if (typeof MathQuill === "undefined") {
@@ -144,7 +135,6 @@ document.addEventListener("DOMContentLoaded", function () {
     var hiddenInput = document.getElementById("math-latex");
 
     var mathField = MQ.MathField(mathFieldElement, {
-        spaceBehavesLikeTab: true,
         handlers: {
             edit: function () {
                 hiddenInput.value = mathField.latex();
@@ -156,12 +146,6 @@ document.addEventListener("DOMContentLoaded", function () {
     {% if input_latex %}
         mathField.latex("{{ input_latex|escapejs }}");
     {% endif %}
-
-    // Render ALL outputs (equations + solutions) as static MathQuill
-    var outputs = document.querySelectorAll('.mq-output');
-    outputs.forEach(function(el) {
-        MQ.StaticMath(el);
-    });
 });
 </script>
 
