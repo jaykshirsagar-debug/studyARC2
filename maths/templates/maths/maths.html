@@ -1,48 +1,168 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Dashboard - StudyARC{% endblock %}
+{% block title %}Math Solver - StudyARC{% endblock %}
 
 {% block exthead %}
-    <!-- jQuery first -->
+    <!-- jQuery required for MathQuill -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 
-    <!-- Local MathQuill -->
+    <!-- MathQuill -->
     <link rel="stylesheet" href="{% static 'maths/css/mathquill.min.css' %}">
     <script src="{% static 'maths/js/mathquill.min.js' %}"></script>
+    <!-- Optional: your extra JS -->
     <script src="{% static 'maths/js/casio.js' %}"></script>
+
+    <style>
+        .math-input-box {
+            border: 1px solid #ccc;
+            padding: 10px;
+            min-height: 40px;
+            font-size: 20px;
+            border-radius: 6px;
+            background: white;
+            margin-bottom: 10px;
+        }
+        .result-box {
+            background: #f5f5f5;
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 10px;
+        }
+    </style>
 {% endblock %}
 
 {% block content %}
-    <h1>Hello, {{ user.username }} 👋</h1>
-    <p>Welcome to maths – equation solver v0.1</p>
 
-    <form method="post">
-        {% csrf_token %}
+<h1>Hello, {{ user.username }} 👋</h1>
+<p>Welcome to the StudyARC symbolic equation solver.</p>
 
-        <label>Enter an equation (e.g. \( x^2 = 4 \)):</label>
-        <div id="math-field"
-             style="border: 1px solid #ccc; padding: 8px; min-height: 40px; font-size: 18px;"></div>
+<form method="POST">
+    {% csrf_token %}
 
-        <input type="hidden" id="math-latex" name="expression">
+    <label>Enter an equation:</label>
+    <div id="math-field" class="math-input-box"></div>
 
-        <button type="submit" style="margin-top: 10px;">Solve</button>
-    </form>
+    <input type="hidden" id="math-latex" name="expression"
+           value="{{ input_latex|default:'' }}">
 
-    {% if error %}
-        <p style="color:red; margin-top:1rem;">{{ error }}</p>
+    <br><br>
+
+    <!-- Solution Type -->
+    <label>Solution Type:</label>
+    <select name="solution_type">
+        <option value="real" {% if solution_type == "real" %}selected{% endif %}>Real roots only</option>
+        <option value="complex" {% if solution_type == "complex" %}selected{% endif %}>Real + complex roots</option>
+    </select>
+
+    <br><br>
+
+    <!-- Solve Mode -->
+    <label>Solution Style:</label>
+    <select name="solve_mode">
+        <option value="interval" {% if solve_mode == "interval" %}selected{% endif %}>
+            Solutions within a domain
+        </option>
+        <option value="general" {% if solve_mode == "general" %}selected{% endif %}>
+            General solution (with n)
+        </option>
+    </select>
+
+    <br><br>
+
+    <!-- Domain -->
+    <label>Domain (only for interval mode):</label><br>
+    <input type="text" name="domain_min" value="{{ domain_min|default:'-10' }}" style="width: 80px;">
+    to
+    <input type="text" name="domain_max" value="{{ domain_max|default:'10' }}" style="width: 80px;">
+
+    <br><br>
+
+    <button type="submit">Solve</button>
+</form>
+
+<hr>
+
+<!-- ERROR MESSAGE -->
+{% if error %}
+<div class="result-box" style="color: red;">
+    <strong>Error:</strong> {{ error }}
+</div>
+{% endif %}
+
+<!-- INTERVAL SOLUTIONS -->
+{% if solutions %}
+<div class="result-box">
+    <h2>Solutions in Domain</h2>
+
+    {% if equation %}
+    <p><strong>Equation:</strong>
+        <span class="mq-output">{{ equation }}</span>
+    </p>
     {% endif %}
 
-    {% if solutions %}
-        <div style="margin-top:1rem;">
-            <h2>Solution</h2>
-            <p>Equation: <code>{{ equation }}</code></p>
-            <p>Solving for: <code>{{ variable }}</code></p>
-            <ul>
-                {% for s in solutions %}
-                    <li>{{ variable }} = {{ s }}</li>
-                {% endfor %}
-            </ul>
-        </div>
+    <ul>
+    {% for s in solutions %}
+        <li>
+            <span class="mq-output">{{ s }}</span>
+        </li>
+    {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<!-- GENERAL SOLUTION -->
+{% if general_solution %}
+<div class="result-box">
+    <h2>General Solution</h2>
+
+    {% if equation %}
+    <p><strong>Equation:</strong>
+        <span class="mq-output">{{ equation }}</span>
+    </p>
     {% endif %}
+
+    <p style="font-size: 1.2em;">
+        <span class="mq-output">{{ general_solution }}</span>
+    </p>
+    <p style="font-size: 0.9em; color: #666;">
+        Here, <strong>n</strong> represents any integer (n ∈ ℤ).
+    </p>
+</div>
+{% endif %}
+
+<!-- MathQuill Setup Script -->
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    if (typeof MathQuill === "undefined") {
+        console.error("MathQuill did NOT load.");
+        return;
+    }
+
+    var MQ = MathQuill.getInterface(2);
+    var mathFieldElement = document.getElementById("math-field");
+    var hiddenInput = document.getElementById("math-latex");
+
+    var mathField = MQ.MathField(mathFieldElement, {
+        spaceBehavesLikeTab: true,
+        handlers: {
+            edit: function () {
+                hiddenInput.value = mathField.latex();
+            }
+        }
+    });
+
+    // Restore previous input into the MathQuill field
+    {% if input_latex %}
+        mathField.latex("{{ input_latex|escapejs }}");
+    {% endif %}
+
+    // Render ALL outputs (equations + solutions) as static MathQuill
+    var outputs = document.querySelectorAll('.mq-output');
+    outputs.forEach(function(el) {
+        MQ.StaticMath(el);
+    });
+});
+</script>
+
 {% endblock %}
