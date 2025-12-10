@@ -8,6 +8,8 @@
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <link rel="stylesheet" href="{% static 'maths/css/mathquill.min.css' %}">
     <script src="{% static 'maths/js/mathquill.min.js' %}"></script>
+    <!-- 👇 ADD THIS LINE 👇 -->
+    <script src="{% static 'maths/js/casio.js' %}"></script>
 
     <style>
         .math-input-box {
@@ -25,8 +27,28 @@
             border-radius: 6px;
             margin-top: 10px;
         }
+
+        .button-bar {
+            margin-top: 10px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .mq-btn {
+            padding: 6px 12px;
+            font-size: 15px;
+            border-radius: 6px;
+            border: 1px solid #888;
+            background: #f2f2f2;
+            cursor: pointer;
+        }
+        .mq-btn:hover {
+            background: #e0e0e0;
+        }
     </style>
 {% endblock %}
+
 
 {% block content %}
 
@@ -43,6 +65,45 @@
            value="{{ input_latex|default:'' }}">
 
     <br><br>
+
+    <div class="button-bar">
+
+        <button type="button" class="mq-btn" data-insert="\log">log</button>
+
+        <button type="button" class="mq-btn" data-insert="\sqrt">√</button>
+
+        <button type="button" class="mq-btn" data-insert="\sqrt[]">n√</button>
+
+        <button type="button" class="mq-btn" data-insert="e">e</button>
+
+        <button type="button" class="mq-btn" data-insert="\pi">π</button>
+
+        <button type="button" class="mq-btn" data-insert="\frac{}{}">a⁄b</button>
+
+        <button type="button" class="mq-btn" data-insert="^">xʸ</button>
+
+    </div>
+
+    <style>
+        .button-bar {
+            margin-top: 10px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .mq-btn {
+            padding: 6px 12px;
+            font-size: 15px;
+            border-radius: 6px;
+            border: 1px solid #888;
+            background: #f2f2f2;
+            cursor: pointer;
+        }
+        .mq-btn:hover {
+            background: #e0e0e0;
+        }
+    </style>
 
     <!-- Solution Type -->
     <label>Solution Type:</label>
@@ -73,6 +134,18 @@
     <input type="text" name="domain_max" value="{{ domain_max|default:'10' }}" style="width: 80px;">
 
     <br><br>
+
+    <!-- Add inside your <form> -->
+
+    <label>Solution Format:</label>
+    <select name="format_mode">
+        <option value="decimal" {% if format_mode == "decimal" %}selected{% endif %}>Decimal</option>
+        <option value="standard" {% if format_mode == "standard" %}selected{% endif %}>Standard (Exact)</option>
+    </select>
+
+    <br><br>
+
+
 
     <button type="submit">Solve</button>
 </form>
@@ -122,31 +195,5 @@
 </div>
 {% endif %}
 
-<!-- MathQuill Setup Script for INPUT ONLY -->
-<script>
-document.addEventListener("DOMContentLoaded", function () {
-    if (typeof MathQuill === "undefined") {
-        console.error("MathQuill did NOT load.");
-        return;
-    }
-
-    var MQ = MathQuill.getInterface(2);
-    var mathFieldElement = document.getElementById("math-field");
-    var hiddenInput = document.getElementById("math-latex");
-
-    var mathField = MQ.MathField(mathFieldElement, {
-        handlers: {
-            edit: function () {
-                hiddenInput.value = mathField.latex();
-            }
-        }
-    });
-
-    // Restore previous input into the MathQuill field
-    {% if input_latex %}
-        mathField.latex("{{ input_latex|escapejs }}");
-    {% endif %}
-});
-</script>
 
 {% endblock %}
