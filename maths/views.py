@@ -99,25 +99,37 @@ def simple_format_general_solution(solset, var_name="x") -> str:
 
     unique_sorted = sorted(unique, key=sort_key)
 
+    # ---- ONE OFFSET CASE ----
     if len(unique_sorted) == 1:
-        off = unique_sorted[0]
-        try:
-            if simplify(off % pi) == 0:
-                return f"{var_name} = n*pi, n ∈ ℤ"
-        except Exception:
-            pass
+        off = simplify(unique_sorted[0])
+
+        # If the offset is exactly 0, most common cases are:
+        #   cos(x) = 1  →  x = 2*pi*n
+        #   tan(x) = 0  →  this actually gives two offsets {0, pi}, handled below
+        #
+        # Our sampling for tan(x)=0 produces {0, pi}, so that goes through
+        # the "two offsets" branch, not here. So here, off = 0 is safely the
+        # 2*pi*n family.
+        if off == 0:
+            return f"{var_name} = 2*pi*n, n ∈ ℤ"
+
+        # Generic single offset → offset + 2*pi*n
         return f"{var_name} = {off} + 2*pi*n, n ∈ ℤ"
 
+    # ---- TWO OFFSET CASE ---- (e.g. sin, cos general solutions)
     if len(unique_sorted) == 2:
         a, b = unique_sorted
         try:
             if simplify((b - a) % (2 * pi)) == pi:
+                # Families differ by pi → n*pi form
                 return f"{var_name} = {a} + n*pi, n ∈ ℤ"
         except Exception:
             pass
         return f"{var_name} = {a} + 2*pi*n or {var_name} = {b} + 2*pi*n, n ∈ ℤ"
 
+    # Fallback
     return str(solset)
+
 
 
 # ----------------------------------------------------------------------------
@@ -190,14 +202,26 @@ def maths(request):
         latex_expr = request.POST.get("expression", "").strip()
         solution_type = request.POST.get("solution_type", "real")
         format_mode = request.POST.get("format_mode", "decimal")
-        domain_min = request.POST.get("domain_min", "-10")
-        domain_max = request.POST.get("domain_max", "10")
+
+        # RAW domain strings from form
+        domain_min_raw = (request.POST.get("domain_min", "-oo") or "").strip()
+        domain_max_raw = (request.POST.get("domain_max", "oo") or "").strip()
 
         context["input_latex"] = latex_expr
         context["solution_type"] = solution_type
         context["format_mode"] = format_mode
-        context["domain_min"] = domain_min
-        context["domain_max"] = domain_max
+        context["domain_min"] = domain_min_raw
+        context["domain_max"] = domain_max_raw
+
+        # recognise "infinite" tokens
+        inf_tokens_min = {"-oo", "-inf", "-infinity"}
+        inf_tokens_max = {"oo", "+oo", "inf", "infinity"}
+
+        # Any infinite bound? (semi-infinite OR full infinite)
+        has_infinite_bound = (
+            domain_min_raw in inf_tokens_min or
+            domain_max_raw in inf_tokens_max
+        )
 
         if latex_expr:
             try:
@@ -208,12 +232,26 @@ def maths(request):
                 expr = expr.subs(Symbol("e"), exp(1))
                 expr = expr.subs(Symbol("pi"), pi)
 
-                # Parse domain bounds as floats (for both eqs & inequalities)
+                # -------------------------------
+                # Parse domain using SymPy safely
+                # Map -oo / oo to large finite multiples of pi
+                # -------------------------------
                 try:
-                    a = float(sympify(domain_min).evalf())
-                    b = float(sympify(domain_max).evalf())
+                    if domain_min_raw in inf_tokens_min:
+                        a_sym = -40 * pi
+                    else:
+                        a_sym = sympify(domain_min_raw)
+
+                    if domain_max_raw in inf_tokens_max:
+                        b_sym = 40 * pi
+                    else:
+                        b_sym = sympify(domain_max_raw)
                 except Exception:
-                    a, b = -10.0, 10.0
+                    a_sym, b_sym = -40 * pi, 40 * pi
+
+                # Numeric bounds
+                a = float(a_sym.evalf())
+                b = float(b_sym.evalf())
                 if b <= a:
                     b = a + 1.0
 
@@ -242,15 +280,13 @@ def maths(request):
                 # CASE 1: INEQUALITY
                 # -------------------------------
                 if isinstance(expr, Relational) and not isinstance(expr, Eq):
-                    # Ask SymPy for inequality solution over the reals
                     sol = solve_univariate_inequality(
                         expr, var, domain=S.Reals, relational=False
                     )
 
-                    # Intersect with [a, b] if possible
-                    interval = Interval(a, b)
+                    dom_interval = Interval(a_sym, b_sym)
                     try:
-                        sol_in_dom = sol.intersect(interval)
+                        sol_in_dom = sol.intersect(dom_interval)
                     except Exception:
                         sol_in_dom = sol
 
@@ -262,7 +298,6 @@ def maths(request):
                 # -------------------------------
                 # CASE 2: EQUATION (or plain expr)
                 # -------------------------------
-                # If not already Eq, treat expr = 0
                 if isinstance(expr, Eq):
                     equation = expr
                 else:
@@ -271,21 +306,65 @@ def maths(request):
                 context["equation"] = str(equation)
                 context["variable"] = var_name
 
-                # f(x) = LHS - RHS
                 f = equation.lhs - equation.rhs
 
-                # Global solution set
+                # Global solution set over reals
                 solset = solveset(f, var, domain=S.Reals)
 
                 is_finite = isinstance(solset, FiniteSet)
                 is_condition = isinstance(solset, ConditionSet)
 
-                # Case 2A: Infinite/parametric (ImageSet/Union etc.)  -> general only
+                # 2A: Infinite/parametric set (ImageSet / Union(...))
                 if (not is_finite) and (not is_condition):
-                    context["general_solution"] = simple_format_general_solution(solset, var_name)
-                    return render(request, "maths/maths.html", context)
+                    if has_infinite_bound:
+                        # Any infinite bound in the domain → show general solution only
+                        context["general_solution"] = simple_format_general_solution(solset, var_name)
+                        return render(request, "maths/maths.html", context)
+                    else:
+                        # Purely finite domain → try to get exact roots inside [a_sym, b_sym]
+                        dom_interval = Interval(a_sym, b_sym)
+                        interval_solset = solveset(f, var, domain=dom_interval)
 
-                # Case 2B: ConditionSet -> numeric-only in the domain
+                        solutions_display = []
+
+                        if isinstance(interval_solset, FiniteSet):
+                            roots_sorted = sorted(interval_solset, key=lambda r: r.evalf())
+                            for r in roots_sorted:
+                                solutions_display.append(f"{var_name} = {r}")
+
+                            if solutions_display:
+                                context["solutions"] = solutions_display
+                            else:
+                                context["error"] = "No solutions found in the given domain."
+                            return render(request, "maths/maths.html", context)
+                        else:
+                            # Fallback: numeric roots in [a, b]
+                            f_numeric = f_numeric_from_sympy(f, var)
+                            brackets = bracket_roots(f_numeric, a, b, N=400)
+
+                            roots = []
+                            for left, right in brackets:
+                                r = bisect_root(f_numeric, left, right)
+                                if r is not None:
+                                    roots.append(r)
+
+                            roots_sorted = sorted(roots)
+                            cleaned = []
+                            for r in roots_sorted:
+                                if not cleaned or abs(r - cleaned[-1]) > 1e-6:
+                                    cleaned.append(r)
+
+                            for r in cleaned:
+                                exact = nsimplify(r)
+                                solutions_display.append(f"{var_name} = {exact}")
+
+                            if solutions_display:
+                                context["solutions"] = solutions_display
+                            else:
+                                context["error"] = "No solutions found in the given domain."
+                            return render(request, "maths/maths.html", context)
+
+                # 2B: ConditionSet → numeric-only in [a, b]
                 if is_condition:
                     f_numeric = f_numeric_from_sympy(f, var)
                     brackets = bracket_roots(f_numeric, a, b, N=400)
@@ -316,9 +395,8 @@ def maths(request):
                         context["error"] = "No numeric solutions found in the given domain."
                     return render(request, "maths/maths.html", context)
 
-                # Case 2C: FiniteSet -> filter by domain, display exact/decimal
+                # 2C: FiniteSet → filter by [a, b], exact/decimal output
                 solutions_display = []
-
                 roots_in_interval = []
                 for r in solset:
                     rv = r.evalf()

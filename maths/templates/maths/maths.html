@@ -44,8 +44,6 @@
     </style>
 {% endblock %}
 
-
-
 {% block content %}
 
 <h1>Casio Classpad replica but better, {{ user.username }} 👋</h1>
@@ -75,7 +73,7 @@
 
     <br>
 
-    <!-- Solution Type (kept for future complex support) -->
+    <!-- Solution Type (future use for complex) -->
     <label>Solution Type:</label>
     <select name="solution_type">
         <option value="real" {% if solution_type == "real" %}selected{% endif %}>Real roots only</option>
@@ -85,10 +83,10 @@
     <br><br>
 
     <!-- Domain -->
-    <label>Domain (for roots in interval):</label><br>
-    <input type="text" name="domain_min" value="{{ domain_min|default:'-10' }}" style="width: 80px;">
+    <label>Domain (for roots / inequalities):</label><br>
+    <input type="text" name="domain_min" value="{{ domain_min|default:'-oo' }}" style="width: 80px;">
     to
-    <input type="text" name="domain_max" value="{{ domain_max|default:'10' }}" style="width: 80px;">
+    <input type="text" name="domain_max" value="{{ domain_max|default:'oo' }}" style="width: 80px;">
 
     <br><br>
 
@@ -103,15 +101,6 @@
 
     <button type="submit">Solve</button>
 </form>
-
-<hr>
-
-<!-- ERROR MESSAGE -->
-{% if error %}
-<div class="result-box" style="color: red;">
-    <strong>Error:</strong> {{ error }}
-</div>
-{% endif %}
 
 <hr>
 
@@ -153,20 +142,16 @@
 {% if inequality_solution %}
 <div class="result-box">
     <h2>Inequality Solution (within domain)</h2>
-
     {% if equation %}
     <p><strong>Inequality:</strong> {{ equation }}</p>
     {% endif %}
-
     <p style="font-size: 1.1em;">
         {{ inequality_solution }}
     </p>
 </div>
 {% endif %}
 
-
 <!-- MathQuill setup & button wiring -->
 <script src="{% static 'maths/js/casio.js' %}"></script>
 
 {% endblock %}
-
