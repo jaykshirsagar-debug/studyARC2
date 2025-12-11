@@ -37,6 +37,7 @@
             border: 1px solid #888;
             background: #f2f2f2;
             cursor: pointer;
+            color: black;
         }
         .mq-btn:hover {
             background: #e0e0e0;
@@ -107,6 +108,18 @@
 {% if error %}
 <div class="result-box" style="color: red;">
     <strong>Error:</strong> {{ error }}
+</div>
+{% endif %}
+
+{% if direct_result %}
+<div class="result-box">
+    <h2>Value</h2>
+    {% if equation %}
+    <p><strong>Expression:</strong> {{ equation }}</p>
+    {% endif %}
+    <p style="font-size: 1.1em;">
+        {{ direct_result }}
+    </p>
 </div>
 {% endif %}
 

@@ -103,25 +103,18 @@ def simple_format_general_solution(solset, var_name="x") -> str:
     if len(unique_sorted) == 1:
         off = simplify(unique_sorted[0])
 
-        # If the offset is exactly 0, most common cases are:
-        #   cos(x) = 1  →  x = 2*pi*n
-        #   tan(x) = 0  →  this actually gives two offsets {0, pi}, handled below
-        #
-        # Our sampling for tan(x)=0 produces {0, pi}, so that goes through
-        # the "two offsets" branch, not here. So here, off = 0 is safely the
-        # 2*pi*n family.
+        # offset = 0 → cos(x)=1 type → 2*pi*n
         if off == 0:
             return f"{var_name} = 2*pi*n, n ∈ ℤ"
 
-        # Generic single offset → offset + 2*pi*n
+        # generic single offset → offset + 2*pi*n
         return f"{var_name} = {off} + 2*pi*n, n ∈ ℤ"
 
-    # ---- TWO OFFSET CASE ---- (e.g. sin, cos general solutions)
+    # ---- TWO OFFSET CASE ---- (e.g. sin, generic cos)
     if len(unique_sorted) == 2:
         a, b = unique_sorted
         try:
             if simplify((b - a) % (2 * pi)) == pi:
-                # Families differ by pi → n*pi form
                 return f"{var_name} = {a} + n*pi, n ∈ ℤ"
         except Exception:
             pass
@@ -129,7 +122,6 @@ def simple_format_general_solution(solset, var_name="x") -> str:
 
     # Fallback
     return str(solset)
-
 
 
 # ----------------------------------------------------------------------------
@@ -193,7 +185,7 @@ def bisect_root(f_numeric, left, right, tol=1e-10, max_iter=80):
 
 
 # ----------------------------------------------------------------------------
-# 3. Main view — equations + inequalities
+# 3. Main view — equations + inequalities + direct evaluation
 # ----------------------------------------------------------------------------
 def maths(request):
     context = {}
@@ -231,6 +223,29 @@ def maths(request):
                 # Treat 'e' and 'pi' as constants
                 expr = expr.subs(Symbol("e"), exp(1))
                 expr = expr.subs(Symbol("pi"), pi)
+
+                # -------------------------------
+                # Direct evaluation: no variables
+                # -------------------------------
+                if not expr.free_symbols:
+                    context["equation"] = str(expr)
+                    # If it's a relational like 1 < 2 or 3 = 3
+                    if isinstance(expr, Relational):
+                        try:
+                            context["direct_result"] = str(bool(expr))
+                        except Exception:
+                            context["direct_result"] = str(expr)
+                    else:
+                        try:
+                            if format_mode == "standard":
+                                exact = nsimplify(expr)
+                                context["direct_result"] = str(exact)
+                            else:
+                                val = expr.evalf()
+                                context["direct_result"] = str(val)
+                        except Exception as e:
+                            context["error"] = f"Could not evaluate expression: {e}"
+                    return render(request, "maths/maths.html", context)
 
                 # -------------------------------
                 # Parse domain using SymPy safely
