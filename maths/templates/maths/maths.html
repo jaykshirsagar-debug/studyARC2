@@ -4,12 +4,9 @@
 {% block title %}Math Solver - StudyARC{% endblock %}
 
 {% block exthead %}
-    <!-- jQuery + MathQuill for INPUT ONLY -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <link rel="stylesheet" href="{% static 'maths/css/mathquill.min.css' %}">
     <script src="{% static 'maths/js/mathquill.min.js' %}"></script>
-    <!-- 👇 ADD THIS LINE 👇 -->
-    <script src="{% static 'maths/js/casio.js' %}"></script>
 
     <style>
         .math-input-box {
@@ -27,14 +24,12 @@
             border-radius: 6px;
             margin-top: 10px;
         }
-
         .button-bar {
             margin-top: 10px;
             display: flex;
             flex-wrap: wrap;
             gap: 6px;
         }
-
         .mq-btn {
             padding: 6px 12px;
             font-size: 15px;
@@ -48,6 +43,7 @@
         }
     </style>
 {% endblock %}
+
 
 
 {% block content %}
@@ -66,46 +62,20 @@
 
     <br><br>
 
+    <!-- BUTTON BAR -->
     <div class="button-bar">
-
         <button type="button" class="mq-btn" data-insert="\log">log</button>
-
         <button type="button" class="mq-btn" data-insert="\sqrt">√</button>
-
         <button type="button" class="mq-btn" data-insert="\sqrt[]">n√</button>
-
         <button type="button" class="mq-btn" data-insert="e">e</button>
-
         <button type="button" class="mq-btn" data-insert="\pi">π</button>
-
         <button type="button" class="mq-btn" data-insert="\frac{}{}">a⁄b</button>
-
         <button type="button" class="mq-btn" data-insert="^">xʸ</button>
-
     </div>
 
-    <style>
-        .button-bar {
-            margin-top: 10px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-        }
+    <br>
 
-        .mq-btn {
-            padding: 6px 12px;
-            font-size: 15px;
-            border-radius: 6px;
-            border: 1px solid #888;
-            background: #f2f2f2;
-            cursor: pointer;
-        }
-        .mq-btn:hover {
-            background: #e0e0e0;
-        }
-    </style>
-
-    <!-- Solution Type -->
+    <!-- Solution Type (kept for future complex support) -->
     <label>Solution Type:</label>
     <select name="solution_type">
         <option value="real" {% if solution_type == "real" %}selected{% endif %}>Real roots only</option>
@@ -114,29 +84,15 @@
 
     <br><br>
 
-    <!-- Solve Mode -->
-    <label>Solution Style:</label>
-    <select name="solve_mode">
-        <option value="interval" {% if solve_mode == "interval" %}selected{% endif %}>
-            Solutions within a domain
-        </option>
-        <option value="general" {% if solve_mode == "general" %}selected{% endif %}>
-            General solution (with n)
-        </option>
-    </select>
-
-    <br><br>
-
     <!-- Domain -->
-    <label>Domain (only for interval mode):</label><br>
+    <label>Domain (for roots in interval):</label><br>
     <input type="text" name="domain_min" value="{{ domain_min|default:'-10' }}" style="width: 80px;">
     to
     <input type="text" name="domain_max" value="{{ domain_max|default:'10' }}" style="width: 80px;">
 
     <br><br>
 
-    <!-- Add inside your <form> -->
-
+    <!-- Solution Format -->
     <label>Solution Format:</label>
     <select name="format_mode">
         <option value="decimal" {% if format_mode == "decimal" %}selected{% endif %}>Decimal</option>
@@ -144,8 +100,6 @@
     </select>
 
     <br><br>
-
-
 
     <button type="submit">Solve</button>
 </form>
@@ -159,7 +113,7 @@
 </div>
 {% endif %}
 
-<!-- INTERVAL SOLUTIONS -->
+<!-- INTERVAL SOLUTIONS (roots in the chosen domain) -->
 {% if solutions %}
 <div class="result-box">
     <h2>Solutions in Domain</h2>
@@ -176,7 +130,7 @@
 </div>
 {% endif %}
 
-<!-- GENERAL SOLUTION -->
+<!-- GENERAL SOLUTION (if infinite/parametric) -->
 {% if general_solution %}
 <div class="result-box">
     <h2>General Solution</h2>
@@ -195,5 +149,8 @@
 </div>
 {% endif %}
 
+<!-- MathQuill setup & button wiring -->
+<script src="{% static 'maths/js/casio.js' %}"></script>
 
 {% endblock %}
+

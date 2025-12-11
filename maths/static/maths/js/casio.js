@@ -1,7 +1,5 @@
 // static/maths/js/casio.js
 document.addEventListener("DOMContentLoaded", function () {
-    console.log("casio.js DOMContentLoaded");
-
     if (typeof MathQuill === "undefined") {
         console.error("MathQuill is NOT loaded");
         return;
@@ -21,23 +19,18 @@ document.addEventListener("DOMContentLoaded", function () {
         handlers: {
             edit: function () {
                 hiddenInput.value = mathField.latex();
-                console.log("Current LaTeX:", hiddenInput.value);
             }
         }
     });
 
-    // ---- INSERT COMMAND INTO MATH FIELD ----
+    // Insert helper
     function insertIntoMathField(latex) {
-        console.log("Inserting:", latex);
         mathField.write(latex);
         mathField.focus();
     }
 
-    // ---- BUTTON HANDLING ----
-    const buttons = document.querySelectorAll(".mq-btn");
-    console.log("Found mq-btn buttons:", buttons.length);
-
-    buttons.forEach(btn => {
+    // Button handling
+    document.querySelectorAll(".mq-btn").forEach(btn => {
         btn.addEventListener("click", () => {
             let cmd = btn.dataset.insert;
             insertIntoMathField(cmd);
