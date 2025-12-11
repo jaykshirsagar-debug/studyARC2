@@ -113,15 +113,20 @@
 </div>
 {% endif %}
 
-<!-- INTERVAL SOLUTIONS (roots in the chosen domain) -->
+<hr>
+
+{% if error %}
+<div class="result-box" style="color: red;">
+    <strong>Error:</strong> {{ error }}
+</div>
+{% endif %}
+
 {% if solutions %}
 <div class="result-box">
     <h2>Solutions in Domain</h2>
-
     {% if equation %}
     <p><strong>Equation:</strong> {{ equation }}</p>
     {% endif %}
-
     <ul>
     {% for s in solutions %}
         <li>{{ s }}</li>
@@ -130,24 +135,35 @@
 </div>
 {% endif %}
 
-<!-- GENERAL SOLUTION (if infinite/parametric) -->
 {% if general_solution %}
 <div class="result-box">
     <h2>General Solution</h2>
-
     {% if equation %}
     <p><strong>Equation:</strong> {{ equation }}</p>
     {% endif %}
-
     <p style="font-size: 1.1em;">
         {{ general_solution }}
     </p>
-
     <p style="font-size: 0.9em; color: #666;">
         (General solutions may include parameters like n ∈ ℤ.)
     </p>
 </div>
 {% endif %}
+
+{% if inequality_solution %}
+<div class="result-box">
+    <h2>Inequality Solution (within domain)</h2>
+
+    {% if equation %}
+    <p><strong>Inequality:</strong> {{ equation }}</p>
+    {% endif %}
+
+    <p style="font-size: 1.1em;">
+        {{ inequality_solution }}
+    </p>
+</div>
+{% endif %}
+
 
 <!-- MathQuill setup & button wiring -->
 <script src="{% static 'maths/js/casio.js' %}"></script>
