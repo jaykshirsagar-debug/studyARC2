@@ -42,6 +42,17 @@
         .mq-btn:hover {
             background: #e0e0e0;
         }
+        .hint {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 6px;
+        }
+        .kbd {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            background: #eee;
+            padding: 2px 6px;
+            border-radius: 6px;
+        }
     </style>
 {% endblock %}
 
@@ -50,10 +61,15 @@
 <h1>Casio Classpad replica but better, {{ user.username }} 👋</h1>
 <p>Welcome to the StudyARC symbolic equation solver.</p>
 
+<div class="hint">
+    Define functions using: <span class="kbd">def f(x)=x^2+1</span><br>
+    Then use: <span class="kbd">f(3)</span>, <span class="kbd">diff(f(x))</span>, <span class="kbd">integrate(f(x),0,1)</span>
+</div>
+
 <form method="POST">
     {% csrf_token %}
 
-    <label>Enter an equation:</label>
+    <label>Enter an equation / expression:</label>
     <div id="math-field" class="math-input-box"></div>
 
     <input type="hidden" id="math-latex" name="expression"
@@ -70,18 +86,13 @@
         <button type="button" class="mq-btn" data-insert="\pi">π</button>
         <button type="button" class="mq-btn" data-insert="\frac{}{}">a⁄b</button>
         <button type="button" class="mq-btn" data-insert="^">xʸ</button>
+        <button type="button" class="mq-btn" data-insert="\space">space</button>
+        <button type="button" class="mq-btn" data-insert="def\ ">def</button>
+
+
     </div>
 
     <br>
-
-    <!-- Solution Type (future use for complex) -->
-    <label>Solution Type:</label>
-    <select name="solution_type">
-        <option value="real" {% if solution_type == "real" %}selected{% endif %}>Real roots only</option>
-        <option value="complex" {% if solution_type == "complex" %}selected{% endif %}>Real + complex roots</option>
-    </select>
-
-    <br><br>
 
     <!-- Domain -->
     <label>Domain (for roots / inequalities):</label><br>
@@ -91,8 +102,8 @@
 
     <br><br>
 
-    <!-- Solution Format -->
-    <label>Solution Format:</label>
+    <!-- Output Format -->
+    <label>Output Format:</label>
     <select name="format_mode">
         <option value="decimal" {% if format_mode == "decimal" %}selected{% endif %}>Decimal</option>
         <option value="standard" {% if format_mode == "standard" %}selected{% endif %}>Standard (Exact)</option>
@@ -100,7 +111,7 @@
 
     <br><br>
 
-    <button type="submit">Solve</button>
+    <button type="submit">EXE</button>
 </form>
 
 <hr>
@@ -113,19 +124,17 @@
 
 {% if direct_result %}
 <div class="result-box">
-    <h2>Value</h2>
+    <h2>Result</h2>
     {% if equation %}
-    <p><strong>Expression:</strong> {{ equation }}</p>
+    <p><strong>Input:</strong> {{ equation }}</p>
     {% endif %}
-    <p style="font-size: 1.1em;">
-        {{ direct_result }}
-    </p>
+    <p style="font-size: 1.1em;">{{ direct_result }}</p>
 </div>
 {% endif %}
 
 {% if solutions %}
 <div class="result-box">
-    <h2>Solutions in Domain</h2>
+    <h2>Solutions</h2>
     {% if equation %}
     <p><strong>Equation:</strong> {{ equation }}</p>
     {% endif %}
@@ -143,9 +152,7 @@
     {% if equation %}
     <p><strong>Equation:</strong> {{ equation }}</p>
     {% endif %}
-    <p style="font-size: 1.1em;">
-        {{ general_solution }}
-    </p>
+    <p style="font-size: 1.1em;">{{ general_solution }}</p>
     <p style="font-size: 0.9em; color: #666;">
         (General solutions may include parameters like n ∈ ℤ.)
     </p>
@@ -154,13 +161,11 @@
 
 {% if inequality_solution %}
 <div class="result-box">
-    <h2>Inequality Solution (within domain)</h2>
+    <h2>Inequality Solution</h2>
     {% if equation %}
     <p><strong>Inequality:</strong> {{ equation }}</p>
     {% endif %}
-    <p style="font-size: 1.1em;">
-        {{ inequality_solution }}
-    </p>
+    <p style="font-size: 1.1em;">{{ inequality_solution }}</p>
 </div>
 {% endif %}
 

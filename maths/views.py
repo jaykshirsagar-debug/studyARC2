@@ -1,14 +1,73 @@
 # maths/views.py
 from django.shortcuts import render
+
 from sympy import (
     Eq, Symbol, exp, Interval, S, solveset, sympify,
-    pi, simplify, nsimplify
+    pi, simplify, nsimplify, Function, diff, integrate
 )
 from sympy.parsing.latex import parse_latex
 from sympy.sets import ConditionSet, Union, ImageSet, FiniteSet
 from sympy.core.relational import Relational
 from sympy.solvers.inequalities import solve_univariate_inequality
 import numpy as np
+import re
+
+
+# ----------------------------------------------------------------------------
+# 0. def f(x)=... parser
+# ----------------------------------------------------------------------------
+import re
+
+def extract_def_command(raw: str):
+    s = raw.strip()
+
+    if not s.lower().startswith("def"):
+        return None
+
+    # Split ONCE at the first "=" (keep RHS intact)
+    if "=" not in s:
+        raise ValueError("Use: def f(x)=...")
+
+    left_raw, rhs_raw = s.split("=", 1)
+
+    # -------------------------
+    # Clean LEFT (for fname/arg)
+    # -------------------------
+    left = left_raw.strip()
+
+    # remove 'def' and LaTeX wrappers
+    left = left[3:]  # after 'def'
+    left = left.replace(r"\left", "").replace(r"\right", "")
+    left = left.replace(r"\ ", " ")
+    left = left.replace("\\", "")  # LEFT ONLY: turn '\ g' into ' g'
+    left = re.sub(r"\s+", "", left)  # remove spaces
+
+    # Expect: f(x)
+    if "(" not in left or ")" not in left:
+        raise ValueError("Use: def f(x)=...")
+
+    fname = left.split("(", 1)[0]
+    arg = left.split("(", 1)[1].split(")", 1)[0]
+
+    if not fname.isidentifier():
+        raise ValueError("Function name must be a valid identifier (e.g. f, g, h).")
+    if not arg.isidentifier():
+        raise ValueError("Function argument must be a single variable like x.")
+
+    # -------------------------
+    # Clean RHS (keep LaTeX!)
+    # -------------------------
+    rhs = rhs_raw.strip()
+    rhs = rhs.replace(r"\left", "").replace(r"\right", "")
+    # keep backslashes so \sin stays \sin
+    # also normalize LaTeX-space to normal space
+    rhs = rhs.replace(r"\ ", " ")
+
+    if not rhs:
+        raise ValueError("Function body is empty.")
+
+    return fname, arg, rhs
+
 
 
 # ----------------------------------------------------------------------------
@@ -107,10 +166,9 @@ def simple_format_general_solution(solset, var_name="x") -> str:
         if off == 0:
             return f"{var_name} = 2*pi*n, n ∈ ℤ"
 
-        # generic single offset → offset + 2*pi*n
         return f"{var_name} = {off} + 2*pi*n, n ∈ ℤ"
 
-    # ---- TWO OFFSET CASE ---- (e.g. sin, generic cos)
+    # ---- TWO OFFSET CASE ----
     if len(unique_sorted) == 2:
         a, b = unique_sorted
         try:
@@ -120,12 +178,11 @@ def simple_format_general_solution(solset, var_name="x") -> str:
             pass
         return f"{var_name} = {a} + 2*pi*n or {var_name} = {b} + 2*pi*n, n ∈ ℤ"
 
-    # Fallback
     return str(solset)
 
 
 # ----------------------------------------------------------------------------
-# 2. Numeric root finding (for equations)
+# 2. Numeric root finding (for ConditionSet equations)
 # ----------------------------------------------------------------------------
 def f_numeric_from_sympy(f, var):
     def f_num(x):
@@ -185,263 +242,253 @@ def bisect_root(f_numeric, left, right, tol=1e-10, max_iter=80):
 
 
 # ----------------------------------------------------------------------------
-# 3. Main view — equations + inequalities + direct evaluation
+# 3. Main view — def/functions + evaluation + eq/ineq
 # ----------------------------------------------------------------------------
 def maths(request):
     context = {}
 
     if request.method == "POST":
-        latex_expr = request.POST.get("expression", "").strip()
-        solution_type = request.POST.get("solution_type", "real")
+        latex_expr = (request.POST.get("expression", "") or "").strip()
         format_mode = request.POST.get("format_mode", "decimal")
-
-        # RAW domain strings from form
-        domain_min_raw = (request.POST.get("domain_min", "-oo") or "").strip()
-        domain_max_raw = (request.POST.get("domain_max", "oo") or "").strip()
+        domain_min = request.POST.get("domain_min", "-oo")
+        domain_max = request.POST.get("domain_max", "oo")
 
         context["input_latex"] = latex_expr
-        context["solution_type"] = solution_type
         context["format_mode"] = format_mode
-        context["domain_min"] = domain_min_raw
-        context["domain_max"] = domain_max_raw
+        context["domain_min"] = domain_min
+        context["domain_max"] = domain_max
 
-        # recognise "infinite" tokens
-        inf_tokens_min = {"-oo", "-inf", "-infinity"}
-        inf_tokens_max = {"oo", "+oo", "inf", "infinity"}
+        if not latex_expr:
+            context["error"] = "Please enter an expression."
+            return render(request, "maths/maths.html", context)
 
-        # Any infinite bound? (semi-infinite OR full infinite)
-        has_infinite_bound = (
-            domain_min_raw in inf_tokens_min or
-            domain_max_raw in inf_tokens_max
-        )
+        # -------------------------------
+        # 3A) DEF COMMAND (must start with def)
+        # -------------------------------
+        try:
+            def_cmd = extract_def_command(latex_expr)
+        except Exception as e:
+            context["error"] = str(e)
+            return render(request, "maths/maths.html", context)
 
-        if latex_expr:
+        if def_cmd:
+            fname, arg, rhs = def_cmd
+
+            # parse RHS as LaTeX
+            var = Symbol(arg)
+            body = parse_latex(rhs)
+
+            # constants
+            body = body.subs(Symbol("e"), exp(1))
+            body = body.subs(Symbol("pi"), pi)
+
+            funcs = request.session.get("functions", {})
+            funcs[fname] = (arg, str(body))  # store as strings for session safety
+            request.session["functions"] = funcs
+
+            context["equation"] = latex_expr
+            context["direct_result"] = f"Defined: {fname}({arg}) = {str(body)}"
+            return render(request, "maths/maths.html", context)
+
+        # -------------------------------
+        # 3B) Parse expression normally
+        # -------------------------------
+        try:
+            expr = parse_latex(latex_expr)
+
+            # constants
+            expr = expr.subs(Symbol("e"), exp(1))
+            expr = expr.subs(Symbol("pi"), pi)
+
+            # Substitute user-defined functions from session
+            funcs = request.session.get("functions", {})
+            for name, (argname, body_str) in funcs.items():
+                arg_sym = Symbol(argname)
+                body_sym = sympify(body_str)
+
+                f = Function(name)
+                expr = expr.replace(f, lambda a: body_sym.subs(arg_sym, a))
+
+            # -----------------------------------------
+            # Domain bounds (allow -oo/oo/pi/etc)
+            # -----------------------------------------
+            a_sym = sympify(domain_min)
+            b_sym = sympify(domain_max)
+
+            # Build Interval for inequalities (if possible)
             try:
-                # Parse LaTeX from MathQuill
-                expr = parse_latex(latex_expr)
+                interval_domain = Interval(a_sym, b_sym)
+            except Exception:
+                interval_domain = None
 
-                # Treat 'e' and 'pi' as constants
-                expr = expr.subs(Symbol("e"), exp(1))
-                expr = expr.subs(Symbol("pi"), pi)
+            # -------------------------------
+            # 3C) diff / integrate / antidiff
+            # -------------------------------
+            if expr.func.__name__ in {"diff", "integrate", "antidiff"}:
+                args = expr.args
+                vars_found = list(expr.free_symbols)
+                var = vars_found[0] if vars_found else Symbol("x")
 
-                # -------------------------------
-                # Direct evaluation: no variables
-                # -------------------------------
-                if not expr.free_symbols:
-                    context["equation"] = str(expr)
-                    # If it's a relational like 1 < 2 or 3 = 3
-                    if isinstance(expr, Relational):
-                        try:
-                            context["direct_result"] = str(bool(expr))
-                        except Exception:
-                            context["direct_result"] = str(expr)
+                if expr.func.__name__ == "diff":
+                    if len(args) == 1:
+                        result = simplify(diff(args[0], var))
                     else:
-                        try:
-                            if format_mode == "standard":
-                                exact = nsimplify(expr)
-                                context["direct_result"] = str(exact)
-                            else:
-                                val = expr.evalf()
-                                context["direct_result"] = str(val)
-                        except Exception as e:
-                            context["error"] = f"Could not evaluate expression: {e}"
+                        result = simplify(diff(*args))
+
+                elif expr.func.__name__ == "antidiff":
+                    # treat as indefinite integral
+                    if len(args) == 1:
+                        result = simplify(integrate(args[0], var))
+                    else:
+                        result = simplify(integrate(*args))
+
+                else:  # integrate(...)
+                    result = simplify(integrate(*args))
+
+                if format_mode == "decimal":
+                    result = result.evalf()
+
+                context["equation"] = latex_expr
+                context["direct_result"] = str(result)
+                return render(request, "maths/maths.html", context)
+
+            # -------------------------------
+            # 3D) Pure numeric evaluation
+            # -------------------------------
+            if not expr.free_symbols and not isinstance(expr, Relational):
+                val = simplify(expr) if format_mode == "standard" else expr.evalf()
+                context["equation"] = latex_expr
+                context["direct_result"] = str(val)
+                return render(request, "maths/maths.html", context)
+
+            # -------------------------------
+            # 3E) Inequalities
+            # -------------------------------
+            if isinstance(expr, Relational) and not isinstance(expr, Eq):
+                symbols = sorted(expr.free_symbols, key=lambda s: s.name)
+                var = symbols[0] if symbols else Symbol("x")
+
+                sol = solve_univariate_inequality(expr, var, domain=S.Reals, relational=False)
+
+                # Intersect with interval if the user gave finite bounds
+                if interval_domain is not None and interval_domain != Interval(-S.Infinity, S.Infinity):
+                    try:
+                        sol = sol.intersect(interval_domain)
+                    except Exception:
+                        pass
+
+                context["equation"] = str(expr)
+                context["inequality_solution"] = str(sol)
+                return render(request, "maths/maths.html", context)
+
+            # -------------------------------
+            # 3F) Equations (or plain expr -> =0)
+            # -------------------------------
+            if isinstance(expr, Eq):
+                equation = expr
+            else:
+                equation = Eq(expr, 0)
+
+            # variable
+            symbols = sorted(equation.free_symbols, key=lambda s: s.name)
+            var = symbols[0] if symbols else Symbol("x")
+
+            f = equation.lhs - equation.rhs
+            solset = solveset(f, var, domain=S.Reals)
+
+            # Infinite -> general
+            if not isinstance(solset, FiniteSet) and not isinstance(solset, ConditionSet):
+                context["equation"] = str(equation)
+                context["general_solution"] = simple_format_general_solution(solset, str(var))
+                return render(request, "maths/maths.html", context)
+
+            # ConditionSet -> numeric scan only if bounds are finite
+            if isinstance(solset, ConditionSet):
+                # Need finite numeric bounds for scanning
+                try:
+                    a = float(a_sym.evalf())
+                    b = float(b_sym.evalf())
+                except Exception:
+                    context["equation"] = str(equation)
+                    context["general_solution"] = f"Solution set described by: {solset}"
                     return render(request, "maths/maths.html", context)
 
-                # -------------------------------
-                # Parse domain using SymPy safely
-                # Map -oo / oo to large finite multiples of pi
-                # -------------------------------
-                try:
-                    if domain_min_raw in inf_tokens_min:
-                        a_sym = -40 * pi
-                    else:
-                        a_sym = sympify(domain_min_raw)
-
-                    if domain_max_raw in inf_tokens_max:
-                        b_sym = 40 * pi
-                    else:
-                        b_sym = sympify(domain_max_raw)
-                except Exception:
-                    a_sym, b_sym = -40 * pi, 40 * pi
-
-                # Numeric bounds
-                a = float(a_sym.evalf())
-                b = float(b_sym.evalf())
                 if b <= a:
                     b = a + 1.0
 
-                # -------------------------------
-                # Variable detection (shared)
-                # -------------------------------
-                symbols = sorted(expr.free_symbols, key=lambda s: s.name)
-                var = None
-                if symbols:
-                    xs = [s for s in symbols if s.name == "x"]
-                    if xs:
-                        var = xs[0]
-                    else:
-                        non_pi = [s for s in symbols if s.name not in ("pi", "π")]
-                        var = non_pi[0] if non_pi else symbols[0]
-                elif "x" in latex_expr:
-                    var = Symbol("x")
+                f_numeric = f_numeric_from_sympy(f, var)
+                brackets = bracket_roots(f_numeric, a, b, N=500)
 
-                if var is None:
-                    context["error"] = "No variable found to solve for."
-                    return render(request, "maths/maths.html", context)
+                roots = []
+                for left, right in brackets:
+                    r = bisect_root(f_numeric, left, right)
+                    if r is not None:
+                        roots.append(r)
 
-                var_name = str(var)
-
-                # -------------------------------
-                # CASE 1: INEQUALITY
-                # -------------------------------
-                if isinstance(expr, Relational) and not isinstance(expr, Eq):
-                    sol = solve_univariate_inequality(
-                        expr, var, domain=S.Reals, relational=False
-                    )
-
-                    dom_interval = Interval(a_sym, b_sym)
-                    try:
-                        sol_in_dom = sol.intersect(dom_interval)
-                    except Exception:
-                        sol_in_dom = sol
-
-                    context["equation"] = str(expr)
-                    context["inequality_solution"] = str(sol_in_dom)
-                    context["variable"] = var_name
-                    return render(request, "maths/maths.html", context)
-
-                # -------------------------------
-                # CASE 2: EQUATION (or plain expr)
-                # -------------------------------
-                if isinstance(expr, Eq):
-                    equation = expr
-                else:
-                    equation = Eq(expr, 0)
-
-                context["equation"] = str(equation)
-                context["variable"] = var_name
-
-                f = equation.lhs - equation.rhs
-
-                # Global solution set over reals
-                solset = solveset(f, var, domain=S.Reals)
-
-                is_finite = isinstance(solset, FiniteSet)
-                is_condition = isinstance(solset, ConditionSet)
-
-                # 2A: Infinite/parametric set (ImageSet / Union(...))
-                if (not is_finite) and (not is_condition):
-                    if has_infinite_bound:
-                        # Any infinite bound in the domain → show general solution only
-                        context["general_solution"] = simple_format_general_solution(solset, var_name)
-                        return render(request, "maths/maths.html", context)
-                    else:
-                        # Purely finite domain → try to get exact roots inside [a_sym, b_sym]
-                        dom_interval = Interval(a_sym, b_sym)
-                        interval_solset = solveset(f, var, domain=dom_interval)
-
-                        solutions_display = []
-
-                        if isinstance(interval_solset, FiniteSet):
-                            roots_sorted = sorted(interval_solset, key=lambda r: r.evalf())
-                            for r in roots_sorted:
-                                solutions_display.append(f"{var_name} = {r}")
-
-                            if solutions_display:
-                                context["solutions"] = solutions_display
-                            else:
-                                context["error"] = "No solutions found in the given domain."
-                            return render(request, "maths/maths.html", context)
-                        else:
-                            # Fallback: numeric roots in [a, b]
-                            f_numeric = f_numeric_from_sympy(f, var)
-                            brackets = bracket_roots(f_numeric, a, b, N=400)
-
-                            roots = []
-                            for left, right in brackets:
-                                r = bisect_root(f_numeric, left, right)
-                                if r is not None:
-                                    roots.append(r)
-
-                            roots_sorted = sorted(roots)
-                            cleaned = []
-                            for r in roots_sorted:
-                                if not cleaned or abs(r - cleaned[-1]) > 1e-6:
-                                    cleaned.append(r)
-
-                            for r in cleaned:
-                                exact = nsimplify(r)
-                                solutions_display.append(f"{var_name} = {exact}")
-
-                            if solutions_display:
-                                context["solutions"] = solutions_display
-                            else:
-                                context["error"] = "No solutions found in the given domain."
-                            return render(request, "maths/maths.html", context)
-
-                # 2B: ConditionSet → numeric-only in [a, b]
-                if is_condition:
-                    f_numeric = f_numeric_from_sympy(f, var)
-                    brackets = bracket_roots(f_numeric, a, b, N=400)
-
-                    roots = []
-                    for left, right in brackets:
-                        r = bisect_root(f_numeric, left, right)
-                        if r is not None:
-                            roots.append(r)
-
-                    roots_sorted = sorted(roots)
-                    cleaned = []
-                    for r in roots_sorted:
-                        if not cleaned or abs(r - cleaned[-1]) > 1e-6:
-                            cleaned.append(r)
-
-                    solutions_display = []
-                    for r in cleaned:
-                        if format_mode == "decimal":
-                            solutions_display.append(f"{var_name} = {round(r, 10)}")
-                        else:
-                            exact = nsimplify(r)
-                            solutions_display.append(f"{var_name} = {exact}")
-
-                    if solutions_display:
-                        context["solutions"] = solutions_display
-                    else:
-                        context["error"] = "No numeric solutions found in the given domain."
-                    return render(request, "maths/maths.html", context)
-
-                # 2C: FiniteSet → filter by [a, b], exact/decimal output
-                solutions_display = []
-                roots_in_interval = []
-                for r in solset:
-                    rv = r.evalf()
-                    if rv.is_real:
-                        val = float(rv)
-                        if a - 1e-9 <= val <= b + 1e-9:
-                            roots_in_interval.append(val)
-
-                roots_in_interval = sorted(roots_in_interval)
+                roots_sorted = sorted(roots)
                 cleaned = []
-                for r in roots_in_interval:
+                for r in roots_sorted:
                     if not cleaned or abs(r - cleaned[-1]) > 1e-6:
                         cleaned.append(r)
 
+                if not cleaned:
+                    context["error"] = "No numeric solutions found in the given domain."
+                    context["equation"] = str(equation)
+                    return render(request, "maths/maths.html", context)
+
+                solutions_display = []
                 for r in cleaned:
                     if format_mode == "decimal":
-                        solutions_display.append(f"{var_name} = {round(r, 10)}")
+                        solutions_display.append(f"{var} = {round(r, 10)}")
                     else:
-                        exact = nsimplify(r)
-                        solutions_display.append(f"{var_name} = {exact}")
+                        solutions_display.append(f"{var} = {nsimplify(r)}")
 
-                if solutions_display:
-                    context["solutions"] = solutions_display
+                context["equation"] = str(equation)
+                context["solutions"] = solutions_display
+                return render(request, "maths/maths.html", context)
+
+            # FiniteSet -> list solutions (optionally filter if bounds are finite)
+            sols = list(solset)
+
+            # If bounds are finite numeric, filter by them. If -oo/oo, show all.
+            finite_filter = True
+            try:
+                a = float(a_sym.evalf())
+                b = float(b_sym.evalf())
+            except Exception:
+                finite_filter = False
+
+            filtered = []
+            if finite_filter:
+                lo, hi = (a, b) if a <= b else (b, a)
+                for s in sols:
+                    sv = s.evalf()
+                    if sv.is_real:
+                        v = float(sv)
+                        if lo - 1e-9 <= v <= hi + 1e-9:
+                            filtered.append(s)
+            else:
+                filtered = sols
+
+            if not filtered:
+                # If user gave finite interval and nothing fits, say so
+                context["error"] = "No solutions found in the given domain."
+                context["equation"] = str(equation)
+                return render(request, "maths/maths.html", context)
+
+            solutions_display = []
+            for s in filtered:
+                if format_mode == "decimal":
+                    solutions_display.append(f"{var} = {s.evalf()}")
                 else:
-                    context["error"] = "No solutions found in the given domain."
+                    solutions_display.append(f"{var} = {s}")
 
-            except Exception as e:
-                context["error"] = f"Could not understand the expression: {e}"
+            context["equation"] = str(equation)
+            context["solutions"] = solutions_display
+            return render(request, "maths/maths.html", context)
 
-        else:
-            context["error"] = "Please enter an equation."
+        except Exception as e:
+            context["error"] = f"Could not understand the expression: {e}"
+            return render(request, "maths/maths.html", context)
 
     return render(request, "maths/maths.html", context)
