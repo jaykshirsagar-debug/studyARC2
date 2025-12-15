@@ -4,56 +4,56 @@
 {% block title %}Math Solver - StudyARC{% endblock %}
 
 {% block exthead %}
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <link rel="stylesheet" href="{% static 'maths/css/mathquill.min.css' %}">
-    <script src="{% static 'maths/js/mathquill.min.js' %}"></script>
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<link rel="stylesheet" href="{% static 'maths/css/mathquill.min.css' %}">
+<script src="{% static 'maths/js/mathquill.min.js' %}"></script>
 
-    <style>
-        .math-input-box {
-            border: 1px solid #ccc;
-            padding: 10px;
-            min-height: 40px;
-            font-size: 20px;
-            border-radius: 6px;
-            background: white;
-            margin-bottom: 10px;
-        }
-        .result-box {
-            background: #f5f5f5;
-            padding: 12px;
-            border-radius: 6px;
-            margin-top: 10px;
-        }
-        .button-bar {
-            margin-top: 10px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-        }
-        .mq-btn {
-            padding: 6px 12px;
-            font-size: 15px;
-            border-radius: 6px;
-            border: 1px solid #888;
-            background: #f2f2f2;
-            cursor: pointer;
-            color: black;
-        }
-        .mq-btn:hover {
-            background: #e0e0e0;
-        }
-        .hint {
-            font-size: 0.9em;
-            color: #666;
-            margin-top: 6px;
-        }
-        .kbd {
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            background: #eee;
-            padding: 2px 6px;
-            border-radius: 6px;
-        }
-    </style>
+<style>
+.math-input-box {
+    border: 1px solid #ccc;
+    padding: 10px;
+    min-height: 40px;
+    font-size: 20px;
+    border-radius: 6px;
+    background: white;
+    margin-bottom: 10px;
+}
+.result-box {
+    background: #f5f5f5;
+    padding: 12px;
+    border-radius: 6px;
+    margin-top: 10px;
+}
+.button-bar {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.mq-btn {
+    padding: 6px 12px;
+    font-size: 15px;
+    border-radius: 6px;
+    border: 1px solid #888;
+    background: #f2f2f2;
+    cursor: pointer;
+    color: black;
+}
+.mq-btn:hover {
+    background: #e0e0e0;
+}
+.hint {
+    font-size: 0.9em;
+    color: #666;
+    margin-top: 6px;
+}
+.kbd {
+    font-family: ui-monospace, monospace;
+    background: #eee;
+    padding: 2px 6px;
+    border-radius: 6px;
+}
+</style>
 {% endblock %}
 
 {% block content %}
@@ -63,113 +63,106 @@
 
 <div class="hint">
     Define functions using: <span class="kbd">def f(x)=x^2+1</span><br>
-    Then use: <span class="kbd">f(3)</span>, <span class="kbd">diff(f(x))</span>, <span class="kbd">integrate(f(x),0,1)</span>
+    Then use: <span class="kbd">f(3)</span>,
+    <span class="kbd">diff(f(x))</span>,
+    <span class="kbd">integrate(f(x),0,1)</span>
 </div>
 
 <form method="POST">
-    {% csrf_token %}
+{% csrf_token %}
 
-    <label>Enter an equation / expression:</label>
-    <div id="math-field" class="math-input-box"></div>
+<label>Enter an equation / expression:</label>
+<div id="math-field" class="math-input-box"></div>
 
-    <input type="hidden" id="math-latex" name="expression"
-           value="{{ input_latex|default:'' }}">
+<input type="hidden" id="math-latex" name="expression"
+       value="{{ input_latex|default:'' }}">
 
-    <br><br>
+<br><br>
 
-    <!-- BUTTON BAR -->
-    <div class="button-bar">
-        <button type="button" class="mq-btn" data-insert="\log">log</button>
-        <button type="button" class="mq-btn" data-insert="\sqrt">√</button>
-        <button type="button" class="mq-btn" data-insert="\sqrt[]">n√</button>
-        <button type="button" class="mq-btn" data-insert="e">e</button>
-        <button type="button" class="mq-btn" data-insert="\pi">π</button>
-        <button type="button" class="mq-btn" data-insert="\frac{}{}">a⁄b</button>
-        <button type="button" class="mq-btn" data-insert="^">xʸ</button>
-        <button type="button" class="mq-btn" data-insert="\space">space</button>
-        <button type="button" class="mq-btn" data-insert="def\ ">def</button>
+<!-- BUTTON BAR -->
+<div class="button-bar">
+    <button type="button" class="mq-btn" data-insert="\log">log</button>
+    <button type="button" class="mq-btn" data-insert="\sqrt">√</button>
+    <button type="button" class="mq-btn" data-insert="\sqrt[]">n√</button>
+    <button type="button" class="mq-btn" data-insert="e">e</button>
+    <button type="button" class="mq-btn" data-insert="\pi">π</button>
+    <button type="button" class="mq-btn" data-insert="\frac{}{}">a⁄b</button>
+    <button type="button" class="mq-btn" data-insert="^">xʸ</button>
+    <button type="button" class="mq-btn" data-insert=" ">space</button>
+    <button type="button" class="mq-btn" data-insert="def\ ">def</button>
+</div>
 
+<br>
 
-    </div>
+<!-- Domain -->
+<label>Domain (for roots / inequalities):</label><br>
+<input type="text" name="domain_min" value="{{ domain_min|default:'-oo' }}" style="width:80px;">
+to
+<input type="text" name="domain_max" value="{{ domain_max|default:'oo' }}" style="width:80px;">
 
-    <br>
+<br><br>
 
-    <!-- Domain -->
-    <label>Domain (for roots / inequalities):</label><br>
-    <input type="text" name="domain_min" value="{{ domain_min|default:'-oo' }}" style="width: 80px;">
-    to
-    <input type="text" name="domain_max" value="{{ domain_max|default:'oo' }}" style="width: 80px;">
+<!-- Output Format -->
+<label>Output Format:</label>
+<select name="format_mode">
+    <option value="decimal" {% if format_mode == "decimal" %}selected{% endif %}>Decimal</option>
+    <option value="standard" {% if format_mode == "standard" %}selected{% endif %}>Standard (Exact)</option>
+</select>
 
-    <br><br>
-
-    <!-- Output Format -->
-    <label>Output Format:</label>
-    <select name="format_mode">
-        <option value="decimal" {% if format_mode == "decimal" %}selected{% endif %}>Decimal</option>
-        <option value="standard" {% if format_mode == "standard" %}selected{% endif %}>Standard (Exact)</option>
-    </select>
-
-    <br><br>
-
-    <button type="submit">EXE</button>
+<br><br>
+<button type="submit">EXE</button>
 </form>
 
 <hr>
 
 {% if error %}
-<div class="result-box" style="color: red;">
-    <strong>Error:</strong> {{ error }}
+<div class="result-box" style="color:red;">
+<strong>Error:</strong> {{ error }}
 </div>
 {% endif %}
 
 {% if direct_result %}
 <div class="result-box">
-    <h2>Result</h2>
-    {% if equation %}
-    <p><strong>Input:</strong> {{ equation }}</p>
-    {% endif %}
-    <p style="font-size: 1.1em;">{{ direct_result }}</p>
+<h2>Result</h2>
+<p>{{ direct_result }}</p>
 </div>
 {% endif %}
 
 {% if solutions %}
 <div class="result-box">
-    <h2>Solutions</h2>
-    {% if equation %}
-    <p><strong>Equation:</strong> {{ equation }}</p>
-    {% endif %}
-    <ul>
-    {% for s in solutions %}
-        <li>{{ s }}</li>
-    {% endfor %}
-    </ul>
+<h2>Solutions</h2>
+<ul>
+{% for s in solutions %}
+<li>{{ s }}</li>
+{% endfor %}
+</ul>
 </div>
 {% endif %}
 
 {% if general_solution %}
 <div class="result-box">
-    <h2>General Solution</h2>
-    {% if equation %}
-    <p><strong>Equation:</strong> {{ equation }}</p>
-    {% endif %}
-    <p style="font-size: 1.1em;">{{ general_solution }}</p>
-    <p style="font-size: 0.9em; color: #666;">
-        (General solutions may include parameters like n ∈ ℤ.)
-    </p>
+<h2>General Solution</h2>
+<p>{{ general_solution }}</p>
 </div>
 {% endif %}
 
 {% if inequality_solution %}
 <div class="result-box">
-    <h2>Inequality Solution</h2>
-    {% if equation %}
-    <p><strong>Inequality:</strong> {{ equation }}</p>
-    {% endif %}
-    <p style="font-size: 1.1em;">{{ inequality_solution }}</p>
+<h2>Inequality Solution</h2>
+<p>{{ inequality_solution }}</p>
 </div>
 {% endif %}
 
-<!-- MathQuill setup & button wiring -->
-<script src="{% static 'maths/js/casio.js' %}"></script>
+{% if functions %}
+<div class="result-box">
+<h2>Defined Functions</h2>
+<ul>
+{% for name, data in functions.items %}
+<li>{{ name }}({{ data.0 }}) = {{ data.1 }}</li>
+{% endfor %}
+</ul>
+</div>
+{% endif %}
 
+<script src="{% static 'maths/js/casio.js' %}"></script>
 {% endblock %}
