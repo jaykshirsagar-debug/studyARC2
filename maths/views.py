@@ -7,13 +7,10 @@ from sympy import (
 from sympy.parsing.latex import parse_latex
 from sympy.sets import FiniteSet, ConditionSet
 import re
+import json
 
-# ===== GRAPHING IMPORTS (PHASE 1) =====
-import io, base64
+# ===== GRAPHING IMPORTS (PHASE 1/2) =====
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 
 # =====================================================
@@ -153,7 +150,7 @@ def expand_domain(expr, var):
 
 
 # =====================================================
-# GRAPH HELPERS (PHASE 1)
+# GRAPH HELPERS (compute-only)
 # =====================================================
 def eval_series(expr, var, xs, y_clip=1e6):
     ys = []
@@ -170,14 +167,11 @@ def eval_series(expr, var, xs, y_clip=1e6):
     return np.array(ys, dtype=float)
 
 
-# =====================================================
-# PLOT DATA COMPUTE (backend-agnostic)
-# =====================================================
-def compute_series(expr, var, xmin, xmax, N=1000, y_clip=1e6):
+def compute_series(expr, var, xmin, xmax, N=1200, y_clip=1e6):
     xs = np.linspace(float(xmin), float(xmax), int(N))
     ys = eval_series(expr, var, xs, y_clip=y_clip)
 
-    # Break lines across large jumps (helps avoid stitching across asymptotes)
+    # Break lines across large jumps (asymptote-ish)
     if len(ys) > 2:
         dy = np.abs(np.diff(ys))
         jump = dy > (0.2 * y_clip)
@@ -189,12 +183,13 @@ def compute_series(expr, var, xmin, xmax, N=1000, y_clip=1e6):
     return xs, ys2
 
 
-def compute_plot_data(parsed_exprs, var, xmin, xmax, N=1000):
+def compute_plot_data(parsed_exprs, labels, var, xmin, xmax, N=1200):
     series = []
     for i, e in enumerate(parsed_exprs):
         xs, ys = compute_series(e, var, xmin, xmax, N=N)
+        label = labels[i] if i < len(labels) else f"y{i+1}"
         series.append({
-            "name": f"y{i+1}",
+            "name": label,
             "x": xs,
             "y": ys,
         })
@@ -206,133 +201,30 @@ def compute_plot_data(parsed_exprs, var, xmin, xmax, N=1000):
     }
 
 
-# =====================================================
-# SCALE HELPERS (robust auto y-limits + optional 2nd axis)
-# =====================================================
-def robust_minmax(y, p_lo=1, p_hi=99):
-    y = np.asarray(y, dtype=float)
-    y = y[np.isfinite(y)]
-    if y.size == 0:
-        return None, None
-
-    lo = np.percentile(y, p_lo)
-    hi = np.percentile(y, p_hi)
-
-    if np.isclose(hi, lo):
-        pad = 1.0 if np.isclose(hi, 0.0) else abs(hi) * 0.2
-        return float(lo - pad), float(hi + pad)
-
-    return float(lo), float(hi)
-
-
-def pad_limits(ymin, ymax, pad_frac=0.08):
-    if ymin is None or ymax is None:
-        return None, None
-    span = ymax - ymin
-    if span <= 0:
-        span = 1.0
-    pad = span * pad_frac
-    return ymin - pad, ymax + pad
-
-
-def range_size(ymin, ymax):
-    if ymin is None or ymax is None:
-        return None
-    return max(1e-12, ymax - ymin)
-
-
-# =====================================================
-# RENDERERS
-# =====================================================
-def render_matplotlib_png(plot_data):
-    fig, ax1 = plt.subplots()
-
-    series = plot_data["series"]
-
-    # Compute robust limits per series
-    limits = []
-    for s in series:
-        ymin, ymax = robust_minmax(s["y"])
-        ymin, ymax = pad_limits(ymin, ymax)
-        limits.append((ymin, ymax))
-
-    # Auto decide: use secondary axis if 2 curves with very different ranges
-    use_secondary_axis = False
-    if len(series) == 2:
-        r1 = range_size(*limits[0])
-        r2 = range_size(*limits[1])
-        if r1 is not None and r2 is not None:
-            ratio = max(r1, r2) / min(r1, r2)
-            if ratio > 40:
-                use_secondary_axis = True
-
-    if use_secondary_axis:
-        ax2 = ax1.twinx()
-
-        r1 = range_size(*limits[0])
-        r2 = range_size(*limits[1])
-
-        if r1 >= r2:
-            idx_big, idx_small = 0, 1
-        else:
-            idx_big, idx_small = 1, 0
-
-        s_big = series[idx_big]
-        s_small = series[idx_small]
-
-        ax1.plot(s_big["x"], s_big["y"], label=s_big["name"])
-        ax2.plot(s_small["x"], s_small["y"], label=s_small["name"])
-
-        if limits[idx_big][0] is not None and limits[idx_big][1] is not None:
-            ax1.set_ylim(*limits[idx_big])
-        if limits[idx_small][0] is not None and limits[idx_small][1] is not None:
-            ax2.set_ylim(*limits[idx_small])
-
-        # Combined legend
-        h1, l1 = ax1.get_legend_handles_labels()
-        h2, l2 = ax2.get_legend_handles_labels()
-        ax1.legend(h1 + h2, l1 + l2, loc="upper left")
-
-    else:
-        for s in series:
-            ax1.plot(s["x"], s["y"], label=s["name"])
-
-        # Apply combined y-limits across all series (robust)
-        ymin_all = None
-        ymax_all = None
-        for (ymin, ymax) in limits:
-            if ymin is None or ymax is None:
-                continue
-            ymin_all = ymin if ymin_all is None else min(ymin_all, ymin)
-            ymax_all = ymax if ymax_all is None else max(ymax_all, ymax)
-
-        if ymin_all is not None and ymax_all is not None:
-            ax1.set_ylim(ymin_all, ymax_all)
-
-        if len(series) > 1:
-            ax1.legend(loc="upper left")
-
-    # Calculator-ish look
-    ax1.axhline(0)
-    ax1.axvline(0)
-    ax1.grid(True, alpha=0.25)
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=140, bbox_inches="tight")
-    plt.close(fig)
-    buf.seek(0)
-    return base64.b64encode(buf.read()).decode()
-
-
 def normalize_graph_expr(s: str, func_store: dict) -> str:
     s = s.strip()
-
     # If user typed just "g" and g is a defined function, convert to "g(x)"
     if re.fullmatch(r"[A-Za-z_]\w*", s) and s in func_store:
         arg, _body = func_store[s]
         return f"{s}({arg})"
-
     return s
+
+
+def np_to_jsonable(arr):
+    # Plotly is happy with nulls for gaps; convert NaN -> None
+    out = []
+    for v in arr.tolist():
+        if v is None:
+            out.append(None)
+        else:
+            try:
+                if isinstance(v, float) and (np.isnan(v) or np.isinf(v)):
+                    out.append(None)
+                else:
+                    out.append(v)
+            except Exception:
+                out.append(None)
+    return out
 
 
 # =====================================================
@@ -361,7 +253,6 @@ def maths(request):
 
                 body = parse_latex(rhs)
                 body = body.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
-
                 body = substitute_defined_functions(body, func_store)
 
                 func_store[name] = (arg, str(body))
@@ -372,7 +263,7 @@ def maths(request):
                 return render(request, "maths/maths.html", context)
 
             # -------------------------------
-            # GRAPH (PHASE 1)
+            # GRAPH (PHASE 2: Plotly)
             # -------------------------------
             if raw.lower().startswith("graph"):
                 m = re.match(r"graph\((.*)\)\s*$", raw, flags=re.I)
@@ -398,6 +289,9 @@ def maths(request):
                 else:
                     raise ValueError("Invalid graph syntax")
 
+                # Labels shown in legend (use the expression string)
+                labels = exprs[:]  # already normalized (e.g., g -> g(x))
+
                 parsed = []
                 for e in exprs:
                     e0 = parse_latex(e)
@@ -412,9 +306,24 @@ def maths(request):
                         var = sorted(list(e.free_symbols), key=lambda s: s.name)[0]
                         break
 
-                plot_data = compute_plot_data(parsed, var, xmin, xmax, N=1000)
+                plot_data = compute_plot_data(parsed, labels, var, xmin, xmax, N=1600)
 
-                context["plot_png"] = render_matplotlib_png(plot_data)
+                # Convert numpy arrays to JSON-safe lists (NaN -> null)
+                payload = {
+                    "xmin": plot_data["xmin"],
+                    "xmax": plot_data["xmax"],
+                    "var": plot_data["var"],
+                    "series": [
+                        {
+                            "name": s["name"],
+                            "x": np_to_jsonable(s["x"]),
+                            "y": np_to_jsonable(s["y"]),
+                        }
+                        for s in plot_data["series"]
+                    ]
+                }
+
+                context["plot_data_json"] = json.dumps(payload)
                 context["direct_result"] = f"Graph window: [{xmin}, {xmax}]"
                 return render(request, "maths/maths.html", context)
 

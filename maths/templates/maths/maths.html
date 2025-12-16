@@ -66,7 +66,8 @@
     Then use: <span class="kbd">f(3)</span>,
     <span class="kbd">diff(f(x))</span>,
     <span class="kbd">integrate(f(x),0,1)</span><br>
-    Graph with: <span class="kbd">graph(f(x))</span> or <span class="kbd">graph(f(x),-10,10)</span> or <span class="kbd">graph(f(x),g(x),-10,10)</span>
+    Graph with: <span class="kbd">graph(f)</span>, <span class="kbd">graph(f(x))</span>,
+    <span class="kbd">graph(f(x),g(x),-10,10)</span>
 </div>
 
 <form method="POST">
@@ -80,7 +81,6 @@
 
 <br><br>
 
-<!-- BUTTON BAR -->
 <div class="button-bar">
     <button type="button" class="mq-btn" data-insert="\log">log</button>
     <button type="button" class="mq-btn" data-insert="\sqrt">√</button>
@@ -95,7 +95,6 @@
 
 <br>
 
-<!-- Domain -->
 <label>Domain (for roots / inequalities):</label><br>
 <input type="text" name="domain_min" value="{{ domain_min|default:'-oo' }}" style="width:80px;">
 to
@@ -103,7 +102,6 @@ to
 
 <br><br>
 
-<!-- Output Format -->
 <label>Output Format:</label>
 <select name="format_mode">
     <option value="decimal" {% if format_mode == "decimal" %}selected{% endif %}>Decimal</option>
@@ -129,14 +127,33 @@ to
 </div>
 {% endif %}
 
-{% if plot_png %}
+{% if plot_data_json %}
 <div class="result-box">
     <h2>Graph</h2>
-    <img
-        src="data:image/png;base64,{{ plot_png }}"
-        style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 6px;"
-        alt="Graph"
-    >
+    <div id="graphDiv" style="width:100%; height:420px;"></div>
+
+    <script id="plotData" type="application/json">{{ plot_data_json|safe }}</script>
+    <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+    <script>
+        const payload = JSON.parse(document.getElementById("plotData").textContent);
+
+        const traces = payload.series.map(s => ({
+            name: s.name,
+            x: s.x,
+            y: s.y,
+            mode: "lines",
+            connectgaps: false
+        }));
+
+        const layout = {
+            margin: { t: 20, r: 20, b: 40, l: 50 },
+            xaxis: { range: [payload.xmin, payload.xmax], zeroline: true },
+            yaxis: { zeroline: true },
+            legend: { orientation: "v" }
+        };
+
+        Plotly.newPlot("graphDiv", traces, layout, {responsive: true});
+    </script>
 </div>
 {% endif %}
 
