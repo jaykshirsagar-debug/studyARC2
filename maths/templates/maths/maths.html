@@ -65,7 +65,8 @@
     Define functions using: <span class="kbd">def f(x)=x^2+1</span><br>
     Then use: <span class="kbd">f(3)</span>,
     <span class="kbd">diff(f(x))</span>,
-    <span class="kbd">integrate(f(x),0,1)</span>
+    <span class="kbd">integrate(f(x),0,1)</span><br>
+    Graph with: <span class="kbd">graph(f(x))</span> or <span class="kbd">graph(f(x),-10,10)</span> or <span class="kbd">graph(f(x),g(x),-10,10)</span>
 </div>
 
 <form method="POST">
@@ -125,6 +126,17 @@ to
 <div class="result-box">
 <h2>Result</h2>
 <p>{{ direct_result }}</p>
+</div>
+{% endif %}
+
+{% if plot_png %}
+<div class="result-box">
+    <h2>Graph</h2>
+    <img
+        src="data:image/png;base64,{{ plot_png }}"
+        style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 6px;"
+        alt="Graph"
+    >
 </div>
 {% endif %}
 

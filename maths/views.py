@@ -6,9 +6,14 @@ from sympy import (
 )
 from sympy.parsing.latex import parse_latex
 from sympy.sets import FiniteSet, ConditionSet
-from sympy.core.relational import Relational
-from sympy.solvers.inequalities import solve_univariate_inequality
 import re
+
+# ===== GRAPHING IMPORTS (PHASE 1) =====
+import io, base64
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 # =====================================================
@@ -53,18 +58,28 @@ def extract_def_command(raw):
 
 
 # =====================================================
-# Numeric helpers (IMPROVED root capture)
+# Replace stored functions into any SymPy expression
+# =====================================================
+def substitute_defined_functions(expr, func_store):
+    """
+    Replace f(anything) with the stored body, substituting the argument.
+    """
+    for name, (arg, body) in func_store.items():
+        f = Function(name)
+        arg_sym = Symbol(arg)
+        body_sym = sympify(body)  # stored as string
+        expr = expr.replace(f, lambda x: body_sym.subs(arg_sym, x))
+    return expr
+
+
+# =====================================================
+# Numeric helpers (roots)
 # =====================================================
 def f_numeric(expr, var):
     return lambda x: float(expr.subs(var, x).evalf())
 
 
 def bracket_roots(f, a, b, N=6000, zero_eps=1e-6):
-    """
-    Better bracketing:
-    - captures classic sign-changes
-    - ALSO captures "near-zero" sample points (otherwise you miss roots)
-    """
     xs = [a + (b - a) * i / N for i in range(N + 1)]
     out = []
 
@@ -75,25 +90,16 @@ def bracket_roots(f, a, b, N=6000, zero_eps=1e-6):
         except Exception:
             continue
 
-        # near-zero sample (float rarely equals exactly 0)
         if abs(f0) < zero_eps:
             h = (b - a) / N
             out.append((x0 - h, x0 + h))
-            continue
-
-        # sign change
-        if f0 * f1 < 0:
+        elif f0 * f1 < 0:
             out.append((x0, x1))
 
     return out
 
 
 def bisect(f, a, b, tol=1e-10):
-    """
-    More robust bisection:
-    - accept near-zero endpoints
-    - more iterations for stability
-    """
     try:
         fa, fb = f(a), f(b)
     except Exception:
@@ -125,36 +131,208 @@ def bisect(f, a, b, tol=1e-10):
 
 
 def expand_domain(expr, var):
-    """
-    Casio-style auto-expand window until roots stabilize.
-    Uses improved bracketing so you don't miss roots like x^3 = sin(x).
-    """
     f = f_numeric(expr, var)
     L = 10.0
     prev = None
 
     for _ in range(7):
         roots = []
-        for a, b in bracket_roots(f, -L, L, N=6000, zero_eps=1e-6):
-            r = bisect(f, a, b, tol=1e-10)
+        for a, b in bracket_roots(f, -L, L):
+            r = bisect(f, a, b)
             if r is not None:
                 roots.append(r)
 
-        # de-dup
-        roots = sorted(roots)
-        cleaned = []
-        for r in roots:
-            if not cleaned or abs(r - cleaned[-1]) > 1e-6:
-                cleaned.append(r)
+        roots = sorted(set(round(r, 6) for r in roots))
+        if roots == prev:
+            return roots
 
-        key = tuple(round(r, 8) for r in cleaned)
-        if key == prev:
-            return cleaned
-
-        prev = key
+        prev = roots
         L *= 2.0
 
-    return list(prev) if prev else []
+    return prev or []
+
+
+# =====================================================
+# GRAPH HELPERS (PHASE 1)
+# =====================================================
+def eval_series(expr, var, xs, y_clip=1e6):
+    ys = []
+    for x in xs:
+        try:
+            y = expr.subs(var, x).evalf()
+            y = float(y)
+            if not np.isfinite(y) or abs(y) > y_clip:
+                ys.append(np.nan)
+            else:
+                ys.append(y)
+        except Exception:
+            ys.append(np.nan)
+    return np.array(ys, dtype=float)
+
+
+# =====================================================
+# PLOT DATA COMPUTE (backend-agnostic)
+# =====================================================
+def compute_series(expr, var, xmin, xmax, N=1000, y_clip=1e6):
+    xs = np.linspace(float(xmin), float(xmax), int(N))
+    ys = eval_series(expr, var, xs, y_clip=y_clip)
+
+    # Break lines across large jumps (helps avoid stitching across asymptotes)
+    if len(ys) > 2:
+        dy = np.abs(np.diff(ys))
+        jump = dy > (0.2 * y_clip)
+        ys2 = ys.copy()
+        ys2[1:][jump] = np.nan
+    else:
+        ys2 = ys
+
+    return xs, ys2
+
+
+def compute_plot_data(parsed_exprs, var, xmin, xmax, N=1000):
+    series = []
+    for i, e in enumerate(parsed_exprs):
+        xs, ys = compute_series(e, var, xmin, xmax, N=N)
+        series.append({
+            "name": f"y{i+1}",
+            "x": xs,
+            "y": ys,
+        })
+    return {
+        "xmin": float(xmin),
+        "xmax": float(xmax),
+        "var": str(var),
+        "series": series,
+    }
+
+
+# =====================================================
+# SCALE HELPERS (robust auto y-limits + optional 2nd axis)
+# =====================================================
+def robust_minmax(y, p_lo=1, p_hi=99):
+    y = np.asarray(y, dtype=float)
+    y = y[np.isfinite(y)]
+    if y.size == 0:
+        return None, None
+
+    lo = np.percentile(y, p_lo)
+    hi = np.percentile(y, p_hi)
+
+    if np.isclose(hi, lo):
+        pad = 1.0 if np.isclose(hi, 0.0) else abs(hi) * 0.2
+        return float(lo - pad), float(hi + pad)
+
+    return float(lo), float(hi)
+
+
+def pad_limits(ymin, ymax, pad_frac=0.08):
+    if ymin is None or ymax is None:
+        return None, None
+    span = ymax - ymin
+    if span <= 0:
+        span = 1.0
+    pad = span * pad_frac
+    return ymin - pad, ymax + pad
+
+
+def range_size(ymin, ymax):
+    if ymin is None or ymax is None:
+        return None
+    return max(1e-12, ymax - ymin)
+
+
+# =====================================================
+# RENDERERS
+# =====================================================
+def render_matplotlib_png(plot_data):
+    fig, ax1 = plt.subplots()
+
+    series = plot_data["series"]
+
+    # Compute robust limits per series
+    limits = []
+    for s in series:
+        ymin, ymax = robust_minmax(s["y"])
+        ymin, ymax = pad_limits(ymin, ymax)
+        limits.append((ymin, ymax))
+
+    # Auto decide: use secondary axis if 2 curves with very different ranges
+    use_secondary_axis = False
+    if len(series) == 2:
+        r1 = range_size(*limits[0])
+        r2 = range_size(*limits[1])
+        if r1 is not None and r2 is not None:
+            ratio = max(r1, r2) / min(r1, r2)
+            if ratio > 40:
+                use_secondary_axis = True
+
+    if use_secondary_axis:
+        ax2 = ax1.twinx()
+
+        r1 = range_size(*limits[0])
+        r2 = range_size(*limits[1])
+
+        if r1 >= r2:
+            idx_big, idx_small = 0, 1
+        else:
+            idx_big, idx_small = 1, 0
+
+        s_big = series[idx_big]
+        s_small = series[idx_small]
+
+        ax1.plot(s_big["x"], s_big["y"], label=s_big["name"])
+        ax2.plot(s_small["x"], s_small["y"], label=s_small["name"])
+
+        if limits[idx_big][0] is not None and limits[idx_big][1] is not None:
+            ax1.set_ylim(*limits[idx_big])
+        if limits[idx_small][0] is not None and limits[idx_small][1] is not None:
+            ax2.set_ylim(*limits[idx_small])
+
+        # Combined legend
+        h1, l1 = ax1.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax1.legend(h1 + h2, l1 + l2, loc="upper left")
+
+    else:
+        for s in series:
+            ax1.plot(s["x"], s["y"], label=s["name"])
+
+        # Apply combined y-limits across all series (robust)
+        ymin_all = None
+        ymax_all = None
+        for (ymin, ymax) in limits:
+            if ymin is None or ymax is None:
+                continue
+            ymin_all = ymin if ymin_all is None else min(ymin_all, ymin)
+            ymax_all = ymax if ymax_all is None else max(ymax_all, ymax)
+
+        if ymin_all is not None and ymax_all is not None:
+            ax1.set_ylim(ymin_all, ymax_all)
+
+        if len(series) > 1:
+            ax1.legend(loc="upper left")
+
+    # Calculator-ish look
+    ax1.axhline(0)
+    ax1.axvline(0)
+    ax1.grid(True, alpha=0.25)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
+
+
+def normalize_graph_expr(s: str, func_store: dict) -> str:
+    s = s.strip()
+
+    # If user typed just "g" and g is a defined function, convert to "g(x)"
+    if re.fullmatch(r"[A-Za-z_]\w*", s) and s in func_store:
+        arg, _body = func_store[s]
+        return f"{s}({arg})"
+
+    return s
 
 
 # =====================================================
@@ -171,6 +349,7 @@ def maths(request):
 
         context["input_latex"] = raw
         context["functions"] = func_store
+        context["format_mode"] = format_mode
 
         try:
             # -------------------------------
@@ -179,27 +358,97 @@ def maths(request):
             cmd = extract_def_command(raw)
             if cmd:
                 name, arg, rhs = cmd
+
                 body = parse_latex(rhs)
                 body = body.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
+
+                body = substitute_defined_functions(body, func_store)
+
                 func_store[name] = (arg, str(body))
                 request.session["functions"] = func_store
+
+                context["functions"] = func_store
                 context["direct_result"] = f"Defined: {name}({arg}) = {body}"
                 return render(request, "maths/maths.html", context)
 
             # -------------------------------
-            # INTEGRATE (TEXT-FIRST, CASIO STYLE)
+            # GRAPH (PHASE 1)
+            # -------------------------------
+            if raw.lower().startswith("graph"):
+                m = re.match(r"graph\((.*)\)\s*$", raw, flags=re.I)
+                if not m:
+                    raise ValueError("Use graph(f(x)) or graph(f(x),-10,10)")
+
+                parts = [p.strip() for p in m.group(1).split(",")]
+                xmin, xmax = -10, 10
+
+                if len(parts) == 1:
+                    exprs = [normalize_graph_expr(parts[0], func_store)]
+                elif len(parts) == 3:
+                    exprs = [normalize_graph_expr(parts[0], func_store)]
+                    xmin = float(sympify(parts[1]))
+                    xmax = float(sympify(parts[2]))
+                elif len(parts) == 4:
+                    exprs = [
+                        normalize_graph_expr(parts[0], func_store),
+                        normalize_graph_expr(parts[1], func_store)
+                    ]
+                    xmin = float(sympify(parts[2]))
+                    xmax = float(sympify(parts[3]))
+                else:
+                    raise ValueError("Invalid graph syntax")
+
+                parsed = []
+                for e in exprs:
+                    e0 = parse_latex(e)
+                    e0 = e0.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
+                    e0 = substitute_defined_functions(e0, func_store)
+                    parsed.append(simplify(e0))
+
+                # pick plotting variable
+                var = Symbol("x")
+                for e in parsed:
+                    if e.free_symbols:
+                        var = sorted(list(e.free_symbols), key=lambda s: s.name)[0]
+                        break
+
+                plot_data = compute_plot_data(parsed, var, xmin, xmax, N=1000)
+
+                context["plot_png"] = render_matplotlib_png(plot_data)
+                context["direct_result"] = f"Graph window: [{xmin}, {xmax}]"
+                return render(request, "maths/maths.html", context)
+
+            # -------------------------------
+            # DIFF
+            # -------------------------------
+            if raw.lower().startswith("diff"):
+                m = re.match(r"diff\((.*)\)\s*$", raw, flags=re.I)
+                if not m:
+                    raise ValueError("Use diff(f(x))")
+
+                e0 = parse_latex(m.group(1))
+                e0 = e0.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
+                e0 = substitute_defined_functions(e0, func_store)
+
+                var = sorted(e0.free_symbols, key=lambda s: s.name)[0] if e0.free_symbols else Symbol("x")
+                res = simplify(diff(e0, var))
+
+                context["direct_result"] = str(res.evalf() if format_mode == "decimal" else res)
+                return render(request, "maths/maths.html", context)
+
+            # -------------------------------
+            # INTEGRATE
             # -------------------------------
             if raw.lower().startswith("integrate"):
-                m = re.match(r"integrate\((.*)\)$", raw)
+                m = re.match(r"integrate\((.*)\)\s*$", raw, flags=re.I)
                 if not m:
                     raise ValueError("Use integrate(f(x)) or integrate(f(x),0,1)")
 
                 parts = [p.strip() for p in m.group(1).split(",")]
-                e0 = parse_latex(parts[0])
 
-                for name, (arg, body) in func_store.items():
-                    f = Function(name)
-                    e0 = e0.replace(f, lambda x: sympify(body).subs(Symbol(arg), x))
+                e0 = parse_latex(parts[0])
+                e0 = e0.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
+                e0 = substitute_defined_functions(e0, func_store)
 
                 var = sorted(e0.free_symbols, key=lambda s: s.name)[0] if e0.free_symbols else Symbol("x")
 
@@ -215,68 +464,28 @@ def maths(request):
                 return render(request, "maths/maths.html", context)
 
             # -------------------------------
-            # DIFF
-            # -------------------------------
-            if raw.lower().startswith("diff"):
-                m = re.match(r"diff\((.*)\)\s*$", raw, flags=re.I)
-                if not m:
-                    raise ValueError("Use diff(f(x))")
-
-                inner = m.group(1)
-                e0 = parse_latex(inner)
-                e0 = e0.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
-
-                for name, (arg, body) in func_store.items():
-                    f = Function(name)
-                    e0 = e0.replace(f, lambda x: sympify(body).subs(Symbol(arg), x))
-
-                var = sorted(e0.free_symbols, key=lambda s: s.name)[0] if e0.free_symbols else Symbol("x")
-                res = simplify(diff(e0, var))
-
-                context["direct_result"] = str(res.evalf() if format_mode == "decimal" else res)
-                return render(request, "maths/maths.html", context)
-
-            # -------------------------------
-            # PARSE NORMAL EXPRESSION
+            # NORMAL PARSE
             # -------------------------------
             expr = parse_latex(raw)
             expr = expr.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
+            expr = substitute_defined_functions(expr, func_store)
 
-            for name, (arg, body) in func_store.items():
-                f = Function(name)
-                expr = expr.replace(f, lambda x: sympify(body).subs(Symbol(arg), x))
-
-            # Inequality
-            if isinstance(expr, Relational) and not isinstance(expr, Eq):
-                var = sorted(expr.free_symbols, key=lambda s: s.name)[0]
-                sol = solve_univariate_inequality(expr, var, domain=S.Reals)
-                context["inequality_solution"] = str(sol)
-                return render(request, "maths/maths.html", context)
-
-            # Expression only
             if not isinstance(expr, Eq):
                 shown = simplify(expr)
                 context["direct_result"] = str(shown.evalf() if format_mode == "decimal" else shown)
                 return render(request, "maths/maths.html", context)
 
-            # Equation
-            equation = expr
-            var = sorted(equation.free_symbols, key=lambda s: s.name)[0] if equation.free_symbols else Symbol("x")
-            f_expr = simplify(equation.lhs - equation.rhs)
+            var = sorted(expr.free_symbols, key=lambda s: s.name)[0] if expr.free_symbols else Symbol("x")
+            f_expr = simplify(expr.lhs - expr.rhs)
 
             solset = solveset(f_expr, var, domain=S.Reals)
             if not isinstance(solset, (FiniteSet, ConditionSet)):
                 context["general_solution"] = str(solset)
                 return render(request, "maths/maths.html", context)
 
-            # Numeric roots (auto-expand)
             roots = expand_domain(f_expr, var)
-            if not roots:
-                context["general_solution"] = str(solset)
-                return render(request, "maths/maths.html", context)
-
             context["solutions"] = [
-                f"{var} = {nsimplify(r)}" if format_mode == "standard" else f"{var} ≈ {round(float(r), 10)}"
+                f"{var} = {nsimplify(r)}" if format_mode == "standard" else f"{var} ≈ {r}"
                 for r in roots
             ]
             return render(request, "maths/maths.html", context)
@@ -285,4 +494,5 @@ def maths(request):
             context["error"] = f"Could not understand the expression: {e}"
 
     context["functions"] = func_store
+    context["format_mode"] = context.get("format_mode", "decimal")
     return render(request, "maths/maths.html", context)
