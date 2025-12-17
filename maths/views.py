@@ -1,5 +1,6 @@
 # maths/views.py
 from django.shortcuts import render
+from django.http import JsonResponse
 from sympy import (
     Eq, Symbol, exp, S, solveset, sympify,
     pi, simplify, nsimplify, Function, diff, integrate
@@ -8,8 +9,6 @@ from sympy.parsing.latex import parse_latex
 from sympy.sets import FiniteSet, ConditionSet
 import re
 import json
-
-# ===== GRAPHING IMPORTS (PHASE 1/2) =====
 import numpy as np
 
 
@@ -58,9 +57,6 @@ def extract_def_command(raw):
 # Replace stored functions into any SymPy expression
 # =====================================================
 def substitute_defined_functions(expr, func_store):
-    """
-    Replace f(anything) with the stored body, substituting the argument.
-    """
     for name, (arg, body) in func_store.items():
         f = Function(name)
         arg_sym = Symbol(arg)
@@ -150,81 +146,221 @@ def expand_domain(expr, var):
 
 
 # =====================================================
-# GRAPH HELPERS (compute-only)
+# GRAPH: evaluation + adaptive sampling (Phase 4)
 # =====================================================
-def eval_series(expr, var, xs, y_clip=1e6):
-    ys = []
-    for x in xs:
-        try:
-            y = expr.subs(var, x).evalf()
-            y = float(y)
-            if not np.isfinite(y) or abs(y) > y_clip:
-                ys.append(np.nan)
-            else:
-                ys.append(y)
-        except Exception:
-            ys.append(np.nan)
-    return np.array(ys, dtype=float)
+def eval_point(expr, var, x, y_clip=1e6):
+    try:
+        y = expr.subs(var, x).evalf()
+        y = float(y)
+        if not np.isfinite(y) or abs(y) > y_clip:
+            return None
+        return y
+    except Exception:
+        return None
 
 
-def compute_series(expr, var, xmin, xmax, N=1200, y_clip=1e6):
-    xs = np.linspace(float(xmin), float(xmax), int(N))
-    ys = eval_series(expr, var, xs, y_clip=y_clip)
+def adaptive_sample(expr, var, xmin, xmax, base_segments=240, max_depth=10, y_clip=1e6):
+    """
+    Adaptive sampling: refines segments where midpoint deviates from linear interpolation.
+    Returns (xs, ys) lists (ys contains None for gaps).
+    """
+    xmin = float(xmin)
+    xmax = float(xmax)
 
-    # Break lines across large jumps (asymptote-ish)
-    if len(ys) > 2:
-        dy = np.abs(np.diff(ys))
-        jump = dy > (0.2 * y_clip)
-        ys2 = ys.copy()
-        ys2[1:][jump] = np.nan
-    else:
-        ys2 = ys
+    xs_out = []
+    ys_out = []
 
-    return xs, ys2
+    def refine(x0, y0, x1, y1, depth):
+        # Always output left endpoint once; right endpoint later by caller chaining
+        if depth <= 0:
+            return [(x0, y0), (x1, y1)]
 
+        # If either endpoint is invalid, don't refine; keep as is (gap preserved)
+        if y0 is None or y1 is None:
+            return [(x0, y0), (x1, y1)]
 
-def compute_plot_data(parsed_exprs, labels, var, xmin, xmax, N=1200):
-    series = []
-    for i, e in enumerate(parsed_exprs):
-        xs, ys = compute_series(e, var, xmin, xmax, N=N)
-        label = labels[i] if i < len(labels) else f"y{i+1}"
-        series.append({
-            "name": label,
-            "x": xs,
-            "y": ys,
-        })
-    return {
-        "xmin": float(xmin),
-        "xmax": float(xmax),
-        "var": str(var),
-        "series": series,
-    }
+        xm = 0.5 * (x0 + x1)
+        ym = eval_point(expr, var, xm, y_clip=y_clip)
+
+        # If midpoint invalid, keep as coarse; this helps discontinuities stay broken
+        if ym is None:
+            return [(x0, y0), (x1, y1)]
+
+        ylin = 0.5 * (y0 + y1)
+        scale = max(1.0, abs(y0), abs(y1), abs(ym))
+        tol = 0.0025 * scale  # tweakable: smaller -> more points
+
+        if abs(ym - ylin) > tol:
+            left = refine(x0, y0, xm, ym, depth - 1)
+            right = refine(xm, ym, x1, y1, depth - 1)
+            return left[:-1] + right  # avoid duplicate xm
+        else:
+            return [(x0, y0), (x1, y1)]
+
+    # initial coarse grid
+    xs0 = np.linspace(xmin, xmax, base_segments + 1)
+    ys0 = [eval_point(expr, var, float(x), y_clip=y_clip) for x in xs0]
+
+    pairs = []
+    for i in range(base_segments):
+        x0, x1 = float(xs0[i]), float(xs0[i+1])
+        y0, y1 = ys0[i], ys0[i+1]
+        seg = refine(x0, y0, x1, y1, max_depth)
+        if i > 0:
+            seg = seg[1:]  # avoid duplicating previous endpoint
+        pairs.extend(seg)
+
+    # Post-process: break across huge jumps (avoid connecting over asymptotes)
+    xs = [p[0] for p in pairs]
+    ys = [p[1] for p in pairs]
+
+    for i in range(1, len(ys)):
+        if ys[i-1] is None or ys[i] is None:
+            continue
+        if abs(ys[i] - ys[i-1]) > 2e5:  # jump threshold
+            ys[i] = None
+
+    return xs, ys
 
 
 def normalize_graph_expr(s: str, func_store: dict) -> str:
     s = s.strip()
-    # If user typed just "g" and g is a defined function, convert to "g(x)"
     if re.fullmatch(r"[A-Za-z_]\w*", s) and s in func_store:
         arg, _body = func_store[s]
         return f"{s}({arg})"
     return s
 
 
-def np_to_jsonable(arr):
-    # Plotly is happy with nulls for gaps; convert NaN -> None
-    out = []
-    for v in arr.tolist():
-        if v is None:
-            out.append(None)
-        else:
-            try:
-                if isinstance(v, float) and (np.isnan(v) or np.isinf(v)):
-                    out.append(None)
-                else:
-                    out.append(v)
-            except Exception:
-                out.append(None)
-    return out
+def choose_adaptive_settings(xmin, xmax):
+    width = abs(float(xmax) - float(xmin))
+    if width < 1:
+        return 320, 11
+    if width < 5:
+        return 260, 10
+    if width < 20:
+        return 220, 10
+    return 200, 9
+
+
+def find_intersections(exprA, exprB, var, xmin, xmax, max_roots=20):
+    """
+    Numeric intersections for two expressions in [xmin, xmax].
+    Uses sign-change bracketing + bisection. Returns list of (x, y).
+    """
+    xmin = float(xmin)
+    xmax = float(xmax)
+
+    def h(x):
+        ya = eval_point(exprA, var, x)
+        yb = eval_point(exprB, var, x)
+        if ya is None or yb is None:
+            return None
+        return ya - yb
+
+    # sample grid for bracketing
+    N = 2400
+    xs = np.linspace(xmin, xmax, N)
+    hs = []
+    for x in xs:
+        hs.append(h(float(x)))
+
+    brackets = []
+    for i in range(N - 1):
+        h0, h1 = hs[i], hs[i+1]
+        if h0 is None or h1 is None:
+            continue
+        if abs(h0) < 1e-8:
+            brackets.append((float(xs[i]) - (xmax - xmin) / N, float(xs[i]) + (xmax - xmin) / N))
+            continue
+        if h0 * h1 < 0:
+            brackets.append((float(xs[i]), float(xs[i+1])))
+
+    def bisect_h(a, b):
+        fa = h(a)
+        fb = h(b)
+        if fa is None or fb is None:
+            return None
+        if fa * fb > 0:
+            return None
+        for _ in range(80):
+            m = 0.5 * (a + b)
+            fm = h(m)
+            if fm is None:
+                return None
+            if abs(fm) < 1e-10 or abs(b - a) < 1e-10:
+                return m
+            if fa * fm < 0:
+                b, fb = m, fm
+            else:
+                a, fa = m, fm
+        return 0.5 * (a + b)
+
+    roots = []
+    for (a, b) in brackets:
+        r = bisect_h(a, b)
+        if r is None:
+            continue
+        roots.append(r)
+
+    # dedupe (close roots)
+    roots = sorted(roots)
+    uniq = []
+    eps = (xmax - xmin) * 1e-4 + 1e-6
+    for r in roots:
+        if not uniq or abs(r - uniq[-1]) > eps:
+            uniq.append(r)
+
+    points = []
+    for r in uniq[:max_roots]:
+        y = eval_point(exprA, var, r)
+        if y is None:
+            continue
+        points.append((float(r), float(y)))
+
+    return points
+
+
+def build_plot_payload(exprs, func_store, xmin, xmax):
+    labels = exprs[:]
+
+    parsed = []
+    for e in exprs:
+        e0 = parse_latex(e)
+        e0 = e0.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
+        e0 = substitute_defined_functions(e0, func_store)
+        parsed.append(simplify(e0))
+
+    var = Symbol("x")
+    for e in parsed:
+        if e.free_symbols:
+            var = sorted(list(e.free_symbols), key=lambda s: s.name)[0]
+            break
+
+    base_segments, max_depth = choose_adaptive_settings(xmin, xmax)
+
+    series = []
+    for i, e in enumerate(parsed):
+        xs, ys = adaptive_sample(e, var, xmin, xmax, base_segments=base_segments, max_depth=max_depth)
+        series.append({
+            "name": labels[i] if i < len(labels) else f"y{i+1}",
+            "x": xs,
+            "y": ys,
+        })
+
+    payload = {
+        "xmin": float(xmin),
+        "xmax": float(xmax),
+        "var": str(var),
+        "series": series,
+        "intersections": []
+    }
+
+    # Phase 4: intersections for exactly 2 series
+    if len(parsed) == 2:
+        pts = find_intersections(parsed[0], parsed[1], var, xmin, xmax, max_roots=20)
+        payload["intersections"] = [{"x": x, "y": y} for (x, y) in pts]
+
+    return payload
 
 
 # =====================================================
@@ -244,13 +380,10 @@ def maths(request):
         context["format_mode"] = format_mode
 
         try:
-            # -------------------------------
             # DEF
-            # -------------------------------
             cmd = extract_def_command(raw)
             if cmd:
                 name, arg, rhs = cmd
-
                 body = parse_latex(rhs)
                 body = body.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
                 body = substitute_defined_functions(body, func_store)
@@ -262,9 +395,7 @@ def maths(request):
                 context["direct_result"] = f"Defined: {name}({arg}) = {body}"
                 return render(request, "maths/maths.html", context)
 
-            # -------------------------------
-            # GRAPH (PHASE 2: Plotly)
-            # -------------------------------
+            # GRAPH
             if raw.lower().startswith("graph"):
                 m = re.match(r"graph\((.*)\)\s*$", raw, flags=re.I)
                 if not m:
@@ -282,54 +413,20 @@ def maths(request):
                 elif len(parts) == 4:
                     exprs = [
                         normalize_graph_expr(parts[0], func_store),
-                        normalize_graph_expr(parts[1], func_store)
+                        normalize_graph_expr(parts[1], func_store),
                     ]
                     xmin = float(sympify(parts[2]))
                     xmax = float(sympify(parts[3]))
                 else:
                     raise ValueError("Invalid graph syntax")
 
-                # Labels shown in legend (use the expression string)
-                labels = exprs[:]  # already normalized (e.g., g -> g(x))
-
-                parsed = []
-                for e in exprs:
-                    e0 = parse_latex(e)
-                    e0 = e0.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
-                    e0 = substitute_defined_functions(e0, func_store)
-                    parsed.append(simplify(e0))
-
-                # pick plotting variable
-                var = Symbol("x")
-                for e in parsed:
-                    if e.free_symbols:
-                        var = sorted(list(e.free_symbols), key=lambda s: s.name)[0]
-                        break
-
-                plot_data = compute_plot_data(parsed, labels, var, xmin, xmax, N=1600)
-
-                # Convert numpy arrays to JSON-safe lists (NaN -> null)
-                payload = {
-                    "xmin": plot_data["xmin"],
-                    "xmax": plot_data["xmax"],
-                    "var": plot_data["var"],
-                    "series": [
-                        {
-                            "name": s["name"],
-                            "x": np_to_jsonable(s["x"]),
-                            "y": np_to_jsonable(s["y"]),
-                        }
-                        for s in plot_data["series"]
-                    ]
-                }
+                payload = build_plot_payload(exprs, func_store, xmin, xmax)
 
                 context["plot_data_json"] = json.dumps(payload)
                 context["direct_result"] = f"Graph window: [{xmin}, {xmax}]"
                 return render(request, "maths/maths.html", context)
 
-            # -------------------------------
             # DIFF
-            # -------------------------------
             if raw.lower().startswith("diff"):
                 m = re.match(r"diff\((.*)\)\s*$", raw, flags=re.I)
                 if not m:
@@ -338,27 +435,21 @@ def maths(request):
                 e0 = parse_latex(m.group(1))
                 e0 = e0.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
                 e0 = substitute_defined_functions(e0, func_store)
-
                 var = sorted(e0.free_symbols, key=lambda s: s.name)[0] if e0.free_symbols else Symbol("x")
                 res = simplify(diff(e0, var))
-
                 context["direct_result"] = str(res.evalf() if format_mode == "decimal" else res)
                 return render(request, "maths/maths.html", context)
 
-            # -------------------------------
             # INTEGRATE
-            # -------------------------------
             if raw.lower().startswith("integrate"):
                 m = re.match(r"integrate\((.*)\)\s*$", raw, flags=re.I)
                 if not m:
                     raise ValueError("Use integrate(f(x)) or integrate(f(x),0,1)")
 
                 parts = [p.strip() for p in m.group(1).split(",")]
-
                 e0 = parse_latex(parts[0])
                 e0 = e0.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
                 e0 = substitute_defined_functions(e0, func_store)
-
                 var = sorted(e0.free_symbols, key=lambda s: s.name)[0] if e0.free_symbols else Symbol("x")
 
                 if len(parts) == 1:
@@ -372,9 +463,7 @@ def maths(request):
                 context["direct_result"] = str(res.evalf() if format_mode == "decimal" else res)
                 return render(request, "maths/maths.html", context)
 
-            # -------------------------------
             # NORMAL PARSE
-            # -------------------------------
             expr = parse_latex(raw)
             expr = expr.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
             expr = substitute_defined_functions(expr, func_store)
@@ -405,3 +494,25 @@ def maths(request):
     context["functions"] = func_store
     context["format_mode"] = context.get("format_mode", "decimal")
     return render(request, "maths/maths.html", context)
+
+
+# =====================================================
+# PHASE 3/4: graph-data endpoint (now includes intersections + adaptive sampling)
+# =====================================================
+def graph_data(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only"}, status=405)
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+        exprs = body.get("exprs", [])
+        xmin = float(body.get("xmin"))
+        xmax = float(body.get("xmax"))
+
+        func_store = request.session.get("functions", {})
+
+        payload = build_plot_payload(exprs, func_store, xmin, xmax)
+        return JsonResponse(payload)
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=400)

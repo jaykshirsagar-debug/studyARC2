@@ -5,7 +5,7 @@ from . import views
 app_name = "maths"
 
 urlpatterns = [
-    # Main ClassPad screen
     path("", views.maths, name="maths"),
-
+    path("graph-data/", views.graph_data, name="graph-data"),
 ]
+

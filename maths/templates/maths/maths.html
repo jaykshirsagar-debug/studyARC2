@@ -53,6 +53,33 @@
     padding: 2px 6px;
     border-radius: 6px;
 }
+
+/* ===== Phase 4.5: Intersections panel styling (ADD) ===== */
+.intersections-list {
+    list-style: none;
+    padding-left: 0;
+    margin: 0;
+}
+.intersections-list li {
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.intersections-list li:hover {
+    background: #eaeaea;
+}
+.intersections-empty {
+    color: #666;
+    font-size: 0.95em;
+}
+.intersections-pill {
+    display: inline-block;
+    font-family: ui-monospace, monospace;
+    background: #eee;
+    padding: 2px 8px;
+    border-radius: 999px;
+    margin-right: 8px;
+}
 </style>
 {% endblock %}
 
@@ -130,31 +157,248 @@ to
 {% if plot_data_json %}
 <div class="result-box">
     <h2>Graph</h2>
+
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+        {# Phase 4.5 SAFE FIX: remove data-insert so casio.js doesn't treat it like a MathQuill insert button #}
+        <button type="button" class="mq-btn" id="autoYBtn">Auto Y</button>
+
+        <span class="hint">Zoom X normally; Y stays stable. Click <b>Auto Y</b> to refit Y. Intersections auto-show for 2 graphs.</span>
+    </div>
+
     <div id="graphDiv" style="width:100%; height:420px;"></div>
+</div>
 
-    <script id="plotData" type="application/json">{{ plot_data_json|safe }}</script>
-    <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
-    <script>
-        const payload = JSON.parse(document.getElementById("plotData").textContent);
+{# ============================
+   Phase 4.5: Separate Intersections Area (ADD)
+   (MOVED ABOVE SCRIPT so JS can find the elements)
+   ============================ #}
+<div class="result-box" id="intersectionsBox" style="display:none;">
+    <h2>Intersections</h2>
+    <div id="intersectionsEmpty" class="intersections-empty">
+        No intersections found in the current window. (Tip: Try zooming or expanding the X range.)
+    </div>
+    <ul id="intersectionsList" class="intersections-list"></ul>
+</div>
 
-        const traces = payload.series.map(s => ({
+<script id="plotData" type="application/json">{{ plot_data_json|safe }}</script>
+<script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+<script>
+    const payload = JSON.parse(document.getElementById("plotData").textContent);
+
+    function buildLineTraces(p) {
+        return p.series.map(s => ({
             name: s.name,
             x: s.x,
             y: s.y,
             mode: "lines",
-            connectgaps: false
+            connectgaps: false,
+            hovertemplate: "x=%{x:.6g}<br>y=%{y:.6g}<extra>" + s.name + "</extra>",
         }));
+    }
 
-        const layout = {
-            margin: { t: 20, r: 20, b: 40, l: 50 },
-            xaxis: { range: [payload.xmin, payload.xmax], zeroline: true },
-            yaxis: { zeroline: true },
-            legend: { orientation: "v" }
+    function buildIntersectionTrace(p) {
+        if (!p.intersections || p.intersections.length === 0) return null;
+        return {
+            name: "intersections",
+            x: p.intersections.map(pt => pt.x),
+            y: p.intersections.map(pt => pt.y),
+            mode: "markers",
+            marker: { size: 10 },   // <-- makes points obvious
+            hovertemplate: "x=%{x:.6g}<br>y=%{y:.6g}<extra>intersection</extra>",
         };
 
-        Plotly.newPlot("graphDiv", traces, layout, {responsive: true});
-    </script>
-</div>
+    }
+
+    function buildIntersectionAnnotations(p) {
+        if (!p.intersections || p.intersections.length === 0) return [];
+        // small labels; Plotly will avoid some overlaps automatically
+        return p.intersections.map((pt, i) => ({
+            x: pt.x,
+            y: pt.y,
+            text: `P${i+1}`,
+            showarrow: true,
+            arrowhead: 2,
+            ax: 10,
+            ay: -10
+        }));
+    }
+
+    function computeYRange(series, padFrac = 0.08) {
+        let ymin = Infinity, ymax = -Infinity;
+        for (const s of series) {
+            for (const y of s.y) {
+                if (y === null || y === undefined) continue;
+                if (typeof y !== "number") continue;
+                if (!isFinite(y)) continue;
+                if (y < ymin) ymin = y;
+                if (y > ymax) ymax = y;
+            }
+        }
+        if (!isFinite(ymin) || !isFinite(ymax)) return [-10, 10];
+        if (ymin === ymax) { ymin -= 1; ymax += 1; }
+        const pad = (ymax - ymin) * padFrac;
+        return [ymin - pad, ymax + pad];
+    }
+
+    let stableYRange = computeYRange(payload.series);
+
+    function buildAllTraces(p) {
+        const lines = buildLineTraces(p);
+        const it = buildIntersectionTrace(p);
+        if (it) lines.push(it);
+        return lines;
+    }
+
+    let traces = buildAllTraces(payload);
+
+    let layout = {
+        margin: { t: 20, r: 20, b: 40, l: 50 },
+        xaxis: { range: [payload.xmin, payload.xmax], zeroline: true },
+        yaxis: { range: stableYRange, zeroline: true },
+        legend: { orientation: "v" },
+        annotations: buildIntersectionAnnotations(payload)
+    };
+
+    Plotly.newPlot("graphDiv", traces, layout, {responsive: true});
+
+    document.getElementById("autoYBtn").addEventListener("click", () => {
+        stableYRange = computeYRange(payload.series);
+        Plotly.relayout("graphDiv", {
+            "yaxis.range": stableYRange
+        });
+
+        // Phase 4.5: keep intersections panel in sync (no recompute needed)
+        renderIntersectionsPanel();
+    });
+
+    // ============================
+    // Phase 4.5: Intersections panel (ADD)
+    // ============================
+    function fmtNum(v) {
+        if (v === null || v === undefined) return "";
+        const n = Number(v);
+        if (!isFinite(n)) return "";
+        // pretty compact display
+        return (Math.abs(n) >= 1e6 || (Math.abs(n) > 0 && Math.abs(n) < 1e-4))
+            ? n.toExponential(6)
+            : n.toPrecision(8).replace(/0+$/,'').replace(/\.$/,'');
+    }
+
+    function renderIntersectionsPanel() {
+        const box = document.getElementById("intersectionsBox");
+        const list = document.getElementById("intersectionsList");
+        const empty = document.getElementById("intersectionsEmpty");
+
+        if (!box || !list || !empty) return;
+
+        const pts = payload.intersections || [];
+
+        // show box always when graph exists, but show empty text if none
+        box.style.display = "block";
+
+        // clear old list
+        list.innerHTML = "";
+
+        if (pts.length === 0) {
+            empty.style.display = "block";
+            return;
+        }
+        empty.style.display = "none";
+
+        // Find intersection trace index (it is appended after all line traces if exists)
+        const intersectionTraceIndex = payload.series.length; // because buildAllTraces pushes it last
+
+        pts.forEach((pt, idx) => {
+            const li = document.createElement("li");
+            li.innerHTML = `
+                <span class="intersections-pill">P${idx+1}</span>
+                x = ${fmtNum(pt.x)} , y = ${fmtNum(pt.y)}
+            `;
+
+            // hover list -> highlight point on plot
+            li.addEventListener("mouseenter", () => {
+                try {
+                    Plotly.Fx.hover("graphDiv", [{ curveNumber: intersectionTraceIndex, pointNumber: idx }]);
+                } catch (e) {}
+            });
+            li.addEventListener("mouseleave", () => {
+                try { Plotly.Fx.unhover("graphDiv"); } catch (e) {}
+            });
+
+            // click list -> center around that intersection (quick zoom)
+            li.addEventListener("click", () => {
+                const x = Number(pt.x);
+                if (!isFinite(x)) return;
+                const w = (payload.xmax - payload.xmin);
+                const half = Math.max(w * 0.12, 0.5); // 12% window or minimum 0.5
+                const nxmin = x - half;
+                const nxmax = x + half;
+                Plotly.relayout("graphDiv", {"xaxis.range": [nxmin, nxmax]});
+            });
+
+            list.appendChild(li);
+        });
+    }
+
+    // initial render
+    renderIntersectionsPanel();
+
+    // Phase 3: Real zoom (re-sample on backend) + Phase 4: intersections re-computed
+    let debounce = null;
+
+    document.getElementById("graphDiv").on("plotly_relayout", (ev) => {
+        if (!("xaxis.range[0]" in ev) || !("xaxis.range[1]" in ev)) return;
+
+        const xmin = ev["xaxis.range[0]"];
+        const xmax = ev["xaxis.range[1]"];
+
+        clearTimeout(debounce);
+        debounce = setTimeout(() => {
+            const csrf = document.querySelector('input[name="csrfmiddlewaretoken"]')?.value;
+
+            fetch("{% url 'maths:graph-data' %}", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": csrf
+                },
+                body: JSON.stringify({
+                    exprs: payload.series.map(s => s.name),
+                    xmin: xmin,
+                    xmax: xmax
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    console.error("graph-data error:", data.error);
+                    return;
+                }
+
+                payload.xmin = data.xmin;
+                payload.xmax = data.xmax;
+                payload.series = data.series;
+                payload.intersections = data.intersections || [];
+
+                traces = buildAllTraces(payload);
+
+                layout = {
+                    ...layout,
+                    xaxis: { ...layout.xaxis, range: [data.xmin, data.xmax] },
+                    yaxis: { ...layout.yaxis, range: stableYRange },
+                    annotations: buildIntersectionAnnotations(payload)
+                };
+
+                Plotly.react("graphDiv", traces, layout, {responsive: true});
+
+                // Phase 4.5: update intersections panel after zoom refresh
+                renderIntersectionsPanel();
+            })
+            .catch(err => console.error("graph-data fetch failed:", err));
+        }, 200);
+    });
+</script>
+
 {% endif %}
 
 {% if solutions %}
