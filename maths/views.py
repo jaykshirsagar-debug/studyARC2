@@ -260,20 +260,22 @@ def find_intersections(exprA, exprB, var, xmin, xmax, max_roots=20):
     # sample grid for bracketing
     N = 2400
     xs = np.linspace(xmin, xmax, N)
-    hs = []
-    for x in xs:
-        hs.append(h(float(x)))
+    hs = [h(float(x)) for x in xs]
 
     brackets = []
     for i in range(N - 1):
-        h0, h1 = hs[i], hs[i+1]
+        h0, h1 = hs[i], hs[i + 1]
         if h0 is None or h1 is None:
             continue
+
+        # treat "nearly zero" as a root neighborhood
         if abs(h0) < 1e-8:
-            brackets.append((float(xs[i]) - (xmax - xmin) / N, float(xs[i]) + (xmax - xmin) / N))
+            step = (xmax - xmin) / N
+            brackets.append((float(xs[i]) - step, float(xs[i]) + step))
             continue
+
         if h0 * h1 < 0:
-            brackets.append((float(xs[i]), float(xs[i+1])))
+            brackets.append((float(xs[i]), float(xs[i + 1])))
 
     def bisect_h(a, b):
         fa = h(a)
@@ -282,25 +284,28 @@ def find_intersections(exprA, exprB, var, xmin, xmax, max_roots=20):
             return None
         if fa * fb > 0:
             return None
+
         for _ in range(80):
             m = 0.5 * (a + b)
             fm = h(m)
             if fm is None:
                 return None
+
             if abs(fm) < 1e-10 or abs(b - a) < 1e-10:
                 return m
+
             if fa * fm < 0:
                 b, fb = m, fm
             else:
                 a, fa = m, fm
+
         return 0.5 * (a + b)
 
     roots = []
     for (a, b) in brackets:
         r = bisect_h(a, b)
-        if r is None:
-            continue
-        roots.append(r)
+        if r is not None:
+            roots.append(r)
 
     # dedupe (close roots)
     roots = sorted(roots)
@@ -310,14 +315,39 @@ def find_intersections(exprA, exprB, var, xmin, xmax, max_roots=20):
         if not uniq or abs(r - uniq[-1]) > eps:
             uniq.append(r)
 
+    # ==========================
+    # NEW: snap roots to clean values (0, 1, 2, etc.) when extremely close
+    # ==========================
+    snap_eps = max(1e-10, (xmax - xmin) * 1e-12)
+
+    def snap_value(x):
+        # snap tiny to 0
+        if abs(x) < snap_eps:
+            return 0.0
+        # snap near integer
+        rx = round(x)
+        if abs(x - rx) < snap_eps:
+            return float(rx)
+        return float(x)
+
+    snapped = [snap_value(r) for r in uniq]
+
+    # dedupe again after snapping (important)
+    snapped_sorted = sorted(snapped)
+    uniq2 = []
+    for r in snapped_sorted:
+        if not uniq2 or abs(r - uniq2[-1]) > snap_eps:
+            uniq2.append(r)
+
     points = []
-    for r in uniq[:max_roots]:
+    for r in uniq2[:max_roots]:
         y = eval_point(exprA, var, r)
         if y is None:
             continue
         points.append((float(r), float(y)))
 
     return points
+
 
 
 def build_plot_payload(exprs, func_store, xmin, xmax):
