@@ -3,7 +3,7 @@ from django.shortcuts import render
 from django.http import JsonResponse
 from sympy import (
     Eq, Symbol, exp, S, solveset, sympify,
-    pi, simplify, nsimplify, Function, diff, integrate
+    pi, simplify, nsimplify, Function, diff, integrate, E
 )
 from sympy.parsing.latex import parse_latex
 from sympy.sets import FiniteSet, ConditionSet
@@ -43,7 +43,7 @@ def extract_def_command(raw):
         raise ValueError("Use: def f(x)=...")
 
     fname = left.split("(")[0]
-    arg = left[left.index("(") + 1:left.index(")")]
+    arg = left[left.index("(") + 1:left.index(")")]  # noqa: E203
 
     if not fname.isidentifier():
         raise ValueError("Function name must be a valid identifier.")
@@ -167,57 +167,49 @@ def adaptive_sample(expr, var, xmin, xmax, base_segments=240, max_depth=10, y_cl
     xmin = float(xmin)
     xmax = float(xmax)
 
-    xs_out = []
-    ys_out = []
-
     def refine(x0, y0, x1, y1, depth):
-        # Always output left endpoint once; right endpoint later by caller chaining
         if depth <= 0:
             return [(x0, y0), (x1, y1)]
 
-        # If either endpoint is invalid, don't refine; keep as is (gap preserved)
         if y0 is None or y1 is None:
             return [(x0, y0), (x1, y1)]
 
         xm = 0.5 * (x0 + x1)
         ym = eval_point(expr, var, xm, y_clip=y_clip)
 
-        # If midpoint invalid, keep as coarse; this helps discontinuities stay broken
         if ym is None:
             return [(x0, y0), (x1, y1)]
 
         ylin = 0.5 * (y0 + y1)
         scale = max(1.0, abs(y0), abs(y1), abs(ym))
-        tol = 0.0025 * scale  # tweakable: smaller -> more points
+        tol = 0.0025 * scale
 
         if abs(ym - ylin) > tol:
             left = refine(x0, y0, xm, ym, depth - 1)
             right = refine(xm, ym, x1, y1, depth - 1)
-            return left[:-1] + right  # avoid duplicate xm
+            return left[:-1] + right
         else:
             return [(x0, y0), (x1, y1)]
 
-    # initial coarse grid
     xs0 = np.linspace(xmin, xmax, base_segments + 1)
     ys0 = [eval_point(expr, var, float(x), y_clip=y_clip) for x in xs0]
 
     pairs = []
     for i in range(base_segments):
-        x0, x1 = float(xs0[i]), float(xs0[i+1])
-        y0, y1 = ys0[i], ys0[i+1]
+        x0, x1 = float(xs0[i]), float(xs0[i + 1])
+        y0, y1 = ys0[i], ys0[i + 1]
         seg = refine(x0, y0, x1, y1, max_depth)
         if i > 0:
-            seg = seg[1:]  # avoid duplicating previous endpoint
+            seg = seg[1:]
         pairs.extend(seg)
 
-    # Post-process: break across huge jumps (avoid connecting over asymptotes)
     xs = [p[0] for p in pairs]
     ys = [p[1] for p in pairs]
 
     for i in range(1, len(ys)):
-        if ys[i-1] is None or ys[i] is None:
+        if ys[i - 1] is None or ys[i] is None:
             continue
-        if abs(ys[i] - ys[i-1]) > 2e5:  # jump threshold
+        if abs(ys[i] - ys[i - 1]) > 2e5:
             ys[i] = None
 
     return xs, ys
@@ -242,10 +234,35 @@ def choose_adaptive_settings(xmin, xmax):
     return 200, 9
 
 
+# ==========================
+# NEW: robust graph window parsing (pi / e + implicit multiplication)
+# ==========================
+def parse_window_value(val: str) -> float:
+    """
+    Accepts values like:
+      -10, 10, -2\\pi, 2\\pi, -pi, pi/2, 3*pi, 2e, 2\\e, etc.
+    Fixes "2pi" -> "2*pi" so sympify can parse it.
+    """
+    val = (val or "").strip()
+
+    # latex constants -> sympy friendly tokens
+    val = val.replace("\\pi", "pi")
+    val = val.replace("\\e", "E")  # SymPy constant
+
+    # also accept raw 'e' as E when used as a constant in window values
+    val = re.sub(r"\be\b", "E", val)
+
+    # insert explicit multiplication: 2pi -> 2*pi, -2pi -> -2*pi, (2)pi -> (2)*pi, 2E -> 2*E
+    val = re.sub(r"(\d|\))\s*(pi|E)\b", r"\1*\2", val)
+
+    return float(sympify(val))
+
+
 def find_intersections(exprA, exprB, var, xmin, xmax, max_roots=20):
     """
     Numeric intersections for two expressions in [xmin, xmax].
     Uses sign-change bracketing + bisection. Returns list of (x, y).
+    Includes snapping roots extremely close to 0/integers.
     """
     xmin = float(xmin)
     xmax = float(xmax)
@@ -257,7 +274,6 @@ def find_intersections(exprA, exprB, var, xmin, xmax, max_roots=20):
             return None
         return ya - yb
 
-    # sample grid for bracketing
     N = 2400
     xs = np.linspace(xmin, xmax, N)
     hs = [h(float(x)) for x in xs]
@@ -268,7 +284,6 @@ def find_intersections(exprA, exprB, var, xmin, xmax, max_roots=20):
         if h0 is None or h1 is None:
             continue
 
-        # treat "nearly zero" as a root neighborhood
         if abs(h0) < 1e-8:
             step = (xmax - xmin) / N
             brackets.append((float(xs[i]) - step, float(xs[i]) + step))
@@ -307,7 +322,6 @@ def find_intersections(exprA, exprB, var, xmin, xmax, max_roots=20):
         if r is not None:
             roots.append(r)
 
-    # dedupe (close roots)
     roots = sorted(roots)
     uniq = []
     eps = (xmax - xmin) * 1e-4 + 1e-6
@@ -315,16 +329,11 @@ def find_intersections(exprA, exprB, var, xmin, xmax, max_roots=20):
         if not uniq or abs(r - uniq[-1]) > eps:
             uniq.append(r)
 
-    # ==========================
-    # NEW: snap roots to clean values (0, 1, 2, etc.) when extremely close
-    # ==========================
     snap_eps = max(1e-10, (xmax - xmin) * 1e-12)
 
     def snap_value(x):
-        # snap tiny to 0
         if abs(x) < snap_eps:
             return 0.0
-        # snap near integer
         rx = round(x)
         if abs(x - rx) < snap_eps:
             return float(rx)
@@ -332,7 +341,6 @@ def find_intersections(exprA, exprB, var, xmin, xmax, max_roots=20):
 
     snapped = [snap_value(r) for r in uniq]
 
-    # dedupe again after snapping (important)
     snapped_sorted = sorted(snapped)
     uniq2 = []
     for r in snapped_sorted:
@@ -347,7 +355,6 @@ def find_intersections(exprA, exprB, var, xmin, xmax, max_roots=20):
         points.append((float(r), float(y)))
 
     return points
-
 
 
 def build_plot_payload(exprs, func_store, xmin, xmax):
@@ -372,7 +379,7 @@ def build_plot_payload(exprs, func_store, xmin, xmax):
     for i, e in enumerate(parsed):
         xs, ys = adaptive_sample(e, var, xmin, xmax, base_segments=base_segments, max_depth=max_depth)
         series.append({
-            "name": labels[i] if i < len(labels) else f"y{i+1}",
+            "name": labels[i] if i < len(labels) else f"y{i + 1}",
             "x": xs,
             "y": ys,
         })
@@ -385,7 +392,6 @@ def build_plot_payload(exprs, func_store, xmin, xmax):
         "intersections": []
     }
 
-    # Phase 4: intersections for exactly 2 series
     if len(parsed) == 2:
         pts = find_intersections(parsed[0], parsed[1], var, xmin, xmax, max_roots=20)
         payload["intersections"] = [{"x": x, "y": y} for (x, y) in pts]
@@ -436,17 +442,20 @@ def maths(request):
 
                 if len(parts) == 1:
                     exprs = [normalize_graph_expr(parts[0], func_store)]
+
                 elif len(parts) == 3:
                     exprs = [normalize_graph_expr(parts[0], func_store)]
-                    xmin = float(sympify(parts[1]))
-                    xmax = float(sympify(parts[2]))
+                    xmin = parse_window_value(parts[1])
+                    xmax = parse_window_value(parts[2])
+
                 elif len(parts) == 4:
                     exprs = [
                         normalize_graph_expr(parts[0], func_store),
                         normalize_graph_expr(parts[1], func_store),
                     ]
-                    xmin = float(sympify(parts[2]))
-                    xmax = float(sympify(parts[3]))
+                    xmin = parse_window_value(parts[2])
+                    xmax = parse_window_value(parts[3])
+
                 else:
                     raise ValueError("Invalid graph syntax")
 
@@ -485,7 +494,17 @@ def maths(request):
                 if len(parts) == 1:
                     res = integrate(e0, var)
                 elif len(parts) == 3:
-                    res = integrate(e0, (var, sympify(parts[1]), sympify(parts[2])))
+                    if format_mode == "decimal":
+                        lower = parse_window_value(parts[1])
+                        upper = parse_window_value(parts[2])
+                        res = integrate(e0, (var, lower, upper))
+                    else:
+                        lower = parse_latex(parts[1])
+                        upper = parse_latex(parts[2])
+                        lower = lower.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
+                        upper = upper.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
+                        res = integrate(e0, (var, lower, upper))
+
                 else:
                     raise ValueError("Use integrate(f(x)) or integrate(f(x),0,1)")
 
