@@ -13,37 +13,113 @@ import numpy as np
 
 
 # =====================================================
-# NORMALISE MathQuill letter-by-letter CAS commands
+# NORMALISE MathQuill "letter-by-letter" CAS commands
+#   - FIXED: no more corrupting identifiers like "deft"
+#   - ONLY rewrites standalone command words
 # =====================================================
 def normalize_cas(latex: str) -> str:
     latex = latex.replace(r"\left", "").replace(r"\right", "")
     latex = latex.replace(r"\ ", "")
-    latex = re.sub(r"i\s*n\s*t\s*e\s*g\s*r\s*a\s*t\s*e", "integrate", latex, flags=re.I)
-    latex = re.sub(r"d\s*i\s*f\s*f", "diff", latex, flags=re.I)
-    latex = re.sub(r"a\s*n\s*t\s*i\s*d\s*i\s*f\s*f", "antidiff", latex, flags=re.I)
+
+    # Helper: replace only when it's a standalone token (not inside identifiers)
+    # Examples allowed:
+    #   "d i f f ( ... )" -> "diff( ... )"
+    #   "integrate( ... )" -> "integrate( ... )"
+    # Examples NOT allowed:
+    #   "deft(x)" stays "deft(x)"  (no corruption)
+    def replace_command_spelled_out(text: str, spelled_pattern: str, replacement: str) -> str:
+        # (?<![A-Za-z_]) ... (?![A-Za-z_]) ensures we don't match inside identifiers
+        return re.sub(
+            rf"(?<![A-Za-z_]){spelled_pattern}(?![A-Za-z_])",
+            replacement,
+            text,
+            flags=re.I,
+        )
+
+    latex = replace_command_spelled_out(
+        latex,
+        r"i\s*n\s*t\s*e\s*g\s*r\s*a\s*t\s*e",
+        "integrate"
+    )
+    latex = replace_command_spelled_out(
+        latex,
+        r"d\s*i\s*f\s*f",
+        "diff"
+    )
+
+    # normalize normal typed words safely (word boundaries for identifiers)
+    latex = re.sub(r"(?<![A-Za-z_])integrate(?![A-Za-z_])", "integrate", latex, flags=re.I)
+    latex = re.sub(r"(?<![A-Za-z_])diff(?![A-Za-z_])", "diff", latex, flags=re.I)
+
     return latex
 
 
 # =====================================================
+# Desmos/Wolfram-level "polish": human-friendly command errors
+# =====================================================
+_RE_DEF_TYPO = re.compile(r"^\s*def(?P<fname>[A-Za-z_]\w*)\s*\(\s*(?P<arg>[A-Za-z_]\w*)\s*\)\s*=", re.I)
+_RE_NEAR_COMMAND = re.compile(r"^\s*(?P<cmd>[A-Za-z_]+)\s*\(", re.I)
+
+def friendly_command_hint(raw: str) -> str | None:
+    """
+    Returns a user-friendly error hint for common command typos, otherwise None.
+    Primary goal: catch 'deft(x)=...' and suggest 'def t(x)=...'
+    """
+    s = (raw or "").strip()
+
+    # Case: "deft(x)=..." (user meant "def t(x)=...")
+    if not re.match(r"^\s*def\b", s, flags=re.I):
+        m = _RE_DEF_TYPO.match(s)
+        if m:
+            fname = m.group("fname")
+            arg = m.group("arg")
+            # Split "deft" -> "t" suggestion (fname includes everything after 'def')
+            # i.e. "deft" => fname="t"
+            # If user typed "defmyFunc(...)" => fname="myFunc"
+            return (
+                f"It looks like you meant the **define function** command.\n\n"
+                f"Try:\n"
+                f"  def {fname}({arg}) = ...\n\n"
+                f"Example:\n"
+                f"  def {fname}({arg})=diff(\\sin({arg}^2))\n\n"
+                f"Tip: **`def` must be a separate word** (include a space)."
+            )
+
+    # Optional gentle hints for unknown command-like inputs (polish)
+    m2 = _RE_NEAR_COMMAND.match(s)
+    if m2:
+        cmd = (m2.group("cmd") or "").lower()
+
+        known = {"def", "graph", "diff", "integrate"}
+        if cmd not in known and cmd.startswith("def"):
+            # e.g. "define(...)" / "defx(...)" etc.
+            return (
+                f"Unknown command `{m2.group('cmd')}`.\n\n"
+                f"Did you mean `def`?\n"
+                f"Use:\n"
+                f"  def f(x)=x^2+1"
+            )
+
+    return None
+
+
+# =====================================================
 # DEF f(x)=... parser
+#   - FIXED: "deft(...)" is NOT treated as def
 # =====================================================
 def extract_def_command(raw):
     s = raw.strip()
-    if not s.lower().startswith("def"):
+
+    # Accept both:
+    #   def t(x)=...
+    #   deft(x)=...
+    m = re.match(r"^\s*def\s*([A-Za-z_]\w*)\s*\(\s*([A-Za-z_]\w*)\s*\)\s*=(.*)", s, flags=re.I)
+    if not m:
         return None
 
-    if "=" not in s:
-        raise ValueError("Use: def f(x)=...")
-
-    left, rhs = s.split("=", 1)
-    left = left[3:].replace("\\", "")
-    left = re.sub(r"\s+", "", left)
-
-    if "(" not in left or ")" not in left:
-        raise ValueError("Use: def f(x)=...")
-
-    fname = left.split("(")[0]
-    arg = left[left.index("(") + 1:left.index(")")]  # noqa: E203
+    fname = m.group(1)
+    arg = m.group(2)
+    rhs = m.group(3).strip()
 
     if not fname.isidentifier():
         raise ValueError("Function name must be a valid identifier.")
@@ -235,7 +311,7 @@ def choose_adaptive_settings(xmin, xmax):
 
 
 # ==========================
-# NEW: robust graph window parsing (pi / e + implicit multiplication)
+# robust graph/integral bounds parsing (pi / e + implicit multiplication)
 # ==========================
 def parse_window_value(val: str) -> float:
     """
@@ -244,26 +320,14 @@ def parse_window_value(val: str) -> float:
     Fixes "2pi" -> "2*pi" so sympify can parse it.
     """
     val = (val or "").strip()
-
-    # latex constants -> sympy friendly tokens
     val = val.replace("\\pi", "pi")
-    val = val.replace("\\e", "E")  # SymPy constant
-
-    # also accept raw 'e' as E when used as a constant in window values
+    val = val.replace("\\e", "E")
     val = re.sub(r"\be\b", "E", val)
-
-    # insert explicit multiplication: 2pi -> 2*pi, -2pi -> -2*pi, (2)pi -> (2)*pi, 2E -> 2*E
     val = re.sub(r"(\d|\))\s*(pi|E)\b", r"\1*\2", val)
-
     return float(sympify(val))
 
 
 def find_intersections(exprA, exprB, var, xmin, xmax, max_roots=20):
-    """
-    Numeric intersections for two expressions in [xmin, xmax].
-    Uses sign-change bracketing + bisection. Returns list of (x, y).
-    Includes snapping roots extremely close to 0/integers.
-    """
     xmin = float(xmin)
     xmax = float(xmax)
 
@@ -340,8 +404,8 @@ def find_intersections(exprA, exprB, var, xmin, xmax, max_roots=20):
         return float(x)
 
     snapped = [snap_value(r) for r in uniq]
-
     snapped_sorted = sorted(snapped)
+
     uniq2 = []
     for r in snapped_sorted:
         if not uniq2 or abs(r - uniq2[-1]) > snap_eps:
@@ -400,6 +464,17 @@ def build_plot_payload(exprs, func_store, xmin, xmax):
 
 
 # =====================================================
+# COMMAND DETECTION (IMPROVED)
+#   - word-boundary safe
+#   - whitespace tolerant
+# =====================================================
+_RE_DEF = re.compile(r"^\s*def\b", re.I)
+_RE_GRAPH = re.compile(r"^\s*graph\s*\(\s*(.*)\s*\)\s*$", re.I)
+_RE_DIFF = re.compile(r"^\s*diff\s*\(\s*(.*)\s*\)\s*$", re.I)
+_RE_INTEGRATE = re.compile(r"^\s*integrate\s*\(\s*(.*)\s*\)\s*$", re.I)
+
+
+# =====================================================
 # MAIN VIEW
 # =====================================================
 def maths(request):
@@ -416,6 +491,13 @@ def maths(request):
         context["format_mode"] = format_mode
 
         try:
+            # -------------------------------------------------
+            # POLISH: catch common "def" typos BEFORE SymPy parse
+            # -------------------------------------------------
+            hint = friendly_command_hint(raw)
+            if hint:
+                raise ValueError(hint)
+
             # DEF
             cmd = extract_def_command(raw)
             if cmd:
@@ -424,20 +506,21 @@ def maths(request):
                 body = body.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
                 body = substitute_defined_functions(body, func_store)
 
-                func_store[name] = (arg, str(body))
+                # store simplified body (prevents ugly outputs)
+                body_simplified = simplify(body)
+
+                func_store[name] = (arg, str(body_simplified))
                 request.session["functions"] = func_store
 
                 context["functions"] = func_store
-                context["direct_result"] = f"Defined: {name}({arg}) = {body}"
+                context["direct_result"] = f"Defined: {name}({arg}) = {body_simplified}"
                 return render(request, "maths/maths.html", context)
 
             # GRAPH
-            if raw.lower().startswith("graph"):
-                m = re.match(r"graph\((.*)\)\s*$", raw, flags=re.I)
-                if not m:
-                    raise ValueError("Use graph(f(x)) or graph(f(x),-10,10)")
-
-                parts = [p.strip() for p in m.group(1).split(",")]
+            mg = _RE_GRAPH.match(raw)
+            if mg:
+                inside = mg.group(1)
+                parts = [p.strip() for p in inside.split(",")]
                 xmin, xmax = -10, 10
 
                 if len(parts) == 1:
@@ -457,21 +540,23 @@ def maths(request):
                     xmax = parse_window_value(parts[3])
 
                 else:
-                    raise ValueError("Invalid graph syntax")
+                    raise ValueError(
+                        "Invalid graph syntax.\n\n"
+                        "Try:\n"
+                        "  graph(f(x))\n"
+                        "  graph(f(x),-10,10)\n"
+                        "  graph(f(x),g(x),-10,10)"
+                    )
 
                 payload = build_plot_payload(exprs, func_store, xmin, xmax)
-
                 context["plot_data_json"] = json.dumps(payload)
                 context["direct_result"] = f"Graph window: [{xmin}, {xmax}]"
                 return render(request, "maths/maths.html", context)
 
             # DIFF
-            if raw.lower().startswith("diff"):
-                m = re.match(r"diff\((.*)\)\s*$", raw, flags=re.I)
-                if not m:
-                    raise ValueError("Use diff(f(x))")
-
-                e0 = parse_latex(m.group(1))
+            md = _RE_DIFF.match(raw)
+            if md:
+                e0 = parse_latex(md.group(1))
                 e0 = e0.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
                 e0 = substitute_defined_functions(e0, func_store)
                 var = sorted(e0.free_symbols, key=lambda s: s.name)[0] if e0.free_symbols else Symbol("x")
@@ -480,12 +565,9 @@ def maths(request):
                 return render(request, "maths/maths.html", context)
 
             # INTEGRATE
-            if raw.lower().startswith("integrate"):
-                m = re.match(r"integrate\((.*)\)\s*$", raw, flags=re.I)
-                if not m:
-                    raise ValueError("Use integrate(f(x)) or integrate(f(x),0,1)")
-
-                parts = [p.strip() for p in m.group(1).split(",")]
+            mi = _RE_INTEGRATE.match(raw)
+            if mi:
+                parts = [p.strip() for p in mi.group(1).split(",")]
                 e0 = parse_latex(parts[0])
                 e0 = e0.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
                 e0 = substitute_defined_functions(e0, func_store)
@@ -493,20 +575,25 @@ def maths(request):
 
                 if len(parts) == 1:
                     res = integrate(e0, var)
+
                 elif len(parts) == 3:
                     if format_mode == "decimal":
                         lower = parse_window_value(parts[1])
                         upper = parse_window_value(parts[2])
                         res = integrate(e0, (var, lower, upper))
                     else:
-                        lower = parse_latex(parts[1])
-                        upper = parse_latex(parts[2])
-                        lower = lower.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
-                        upper = upper.subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
+                        lower = parse_latex(parts[1]).subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
+                        upper = parse_latex(parts[2]).subs(Symbol("e"), exp(1)).subs(Symbol("pi"), pi)
                         res = integrate(e0, (var, lower, upper))
 
                 else:
-                    raise ValueError("Use integrate(f(x)) or integrate(f(x),0,1)")
+                    raise ValueError(
+                        "Invalid integrate syntax.\n\n"
+                        "Try:\n"
+                        "  integrate(f(x))\n"
+                        "  integrate(f(x),0,1)\n"
+                        "  integrate(\\sin(x)+2,0,\\pi)"
+                    )
 
                 res = simplify(res)
                 context["direct_result"] = str(res.evalf() if format_mode == "decimal" else res)
@@ -538,6 +625,7 @@ def maths(request):
             return render(request, "maths/maths.html", context)
 
         except Exception as e:
+            # Keep the same wrapper, but allow multi-line "polish" hints to show cleanly
             context["error"] = f"Could not understand the expression: {e}"
 
     context["functions"] = func_store
@@ -546,7 +634,7 @@ def maths(request):
 
 
 # =====================================================
-# PHASE 3/4: graph-data endpoint (now includes intersections + adaptive sampling)
+# graph-data endpoint (includes intersections + adaptive sampling)
 # =====================================================
 def graph_data(request):
     if request.method != "POST":
